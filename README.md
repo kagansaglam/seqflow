@@ -53,6 +53,6 @@ seqflow watch /data/runs --platform illumina
 
 ## Status
 
-Early skeleton. See `TASKS.md` for the roadmap. Tests use mocked demultiplexer
-binaries; real-data validation is a roadmap item and any benchmark numbers
-reported for this project must come from measured runs, not estimates.
+Early development. See `TASKS.md` for the roadmap. Unit tests use mocked
+demultiplexer binaries; validation on real Illumina/ONT runs is still to do.
+Benchmarks in this repository are run on synthetic data and say so.

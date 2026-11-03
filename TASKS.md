@@ -7,10 +7,10 @@
 - [ ] Find small public Illumina test run (BCL) and run `bcl-convert` for real
 - [ ] Public ONT pod5 sample + `dorado demux`
 - [ ] Integration test marked `@pytest.mark.integration` (skipped without tools)
-- [ ] Record measured file counts / sizes for CV claims
+- [ ] Record file counts, sizes and timings of the real runs in the README
 
 ## Phase 2 - Bulk file management (week 2-3)
-- [x] Archive / delete / rename with dry-run + audit log (Q5)
+- [x] Archive / delete / rename with dry-run + audit log
 - [x] Synthetic file-set generator and md5 benchmark tooling
 - [ ] Run the benchmark on a large set on your own machine and record the table in README
 - [ ] Resume-safe manifests
@@ -28,4 +28,4 @@
 
 ## Phase 5 - Polish (week 6)
 - [ ] PacBio `lima` demultiplexer subclass (optional)
-- [ ] Docs, architecture diagram, Zenodo DOI, CV bullets with measured numbers
+- [ ] Docs, architecture diagram, Zenodo DOI, v1.0 release

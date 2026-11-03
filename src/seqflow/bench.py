@@ -1,4 +1,4 @@
-"""Measure bulk-file throughput so CV numbers come from real runs, not estimates.
+"""Measure md5 throughput of a directory of files.
 
 Read-only by default: it never writes into the benchmarked directory. Archiving is
 benchmarked only when an explicit destination is given.
