@@ -73,6 +73,7 @@ def benchmark(root: str | Path, *, workers: Sequence[int] = (1, 2, 4, 8),
         first_read = round(time.perf_counter() - t, 3)
 
     rows = []
+    medians = []
     for w in workers:
         say(f"md5 with {w} worker(s), {repeats} timed pass(es) ...")
         cm = ChecksumManager(workers=w)
@@ -82,15 +83,16 @@ def benchmark(root: str | Path, *, workers: Sequence[int] = (1, 2, 4, 8),
             cm.compute_many(files)
             timings.append(time.perf_counter() - t)
         median = statistics.median(timings)
+        medians.append(median)
         rows.append({
             "workers": w,
             "seconds_first": round(timings[0], 3),
             "seconds_median": round(median, 3),
             "mb_per_s_median": _mb_per_s(inv.total_bytes, median),
         })
-    for r in rows:
-        r["speedup"] = round(rows[0]["seconds_median"] / r["seconds_median"], 2) \
-            if r["seconds_median"] > 0 else 0.0
+    # Speedup uses the unrounded medians; rounded seconds can be 0.0 for tiny data sets.
+    for r, m in zip(rows, medians):
+        r["speedup"] = round(medians[0] / m, 2) if m > 0 else 0.0
 
     warnings = speedup_warnings(rows)
     if not warmup:
