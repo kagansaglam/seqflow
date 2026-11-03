@@ -10,8 +10,9 @@
 - [ ] Record measured file counts / sizes for CV claims
 
 ## Phase 2 - Bulk file management (week 2-3)
-- [ ] Archive / move / delete with dry-run + audit log (Q5)
-- [ ] Generate a large synthetic file set and benchmark md5 verification throughput
+- [x] Archive / delete / rename with dry-run + audit log (Q5)
+- [x] Synthetic file-set generator and md5 benchmark tooling
+- [ ] Run the benchmark on a large set on your own machine and record the table in README
 - [ ] Resume-safe manifests
 
 ## Phase 3 - Database depth (week 3-4)

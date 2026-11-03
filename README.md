@@ -19,6 +19,27 @@ run folder appears -> validate SampleSheet -> demultiplex (Illumina / ONT)
 | `notify.py` | `Notifier` | Log / email; warnings vs errors |
 | `orchestrator.py` | `Orchestrator` | State machine tying the steps together |
 | `watcher.py` | `RunWatcher` | Poll a directory, retry incomplete runs |
+| `filemgr.py` | `FileManager`, `AuditLog` | Inventory, md5-verified archiving, guarded delete, batch rename, duplicate finder, JSONL audit log |
+| `synth.py` | `generate_fileset` | Deterministic synthetic FASTQ-like file sets for benchmarks (not real data) |
+| `bench.py` | `benchmark` | Read-only md5 throughput benchmark with host info |
+
+## Bulk file management
+
+```bash
+seqflow synth /data/bench --files 5000 --min-kb 200 --max-kb 800 --paired
+seqflow inventory /data/bench --pattern "*.fastq.gz"
+seqflow bench /data/bench --workers 1 2 4 8 --repeats 3
+seqflow archive /data/run1 /archive/run1 --dry-run --audit-log audit.jsonl
+seqflow archive /data/run1 /archive/run1 --remove-source --audit-log audit.jsonl
+seqflow prune /data/scratch --older-than-days 30            # dry-run
+seqflow prune /data/scratch --older-than-days 30 --execute
+seqflow rename /data/run1 --regex "_R(\d)\.fastq\.gz$" --repl "_L001_R\1_001.fastq.gz" --dry-run
+```
+
+Safety rules: destructive commands are dry-run by default or need an explicit flag;
+the source of an archive is removed only after every copy passes md5 verification;
+deletion refuses paths outside the given root and validates the whole list before
+removing anything; symlinks are never followed.
 
 ## Quick start
 

@@ -26,5 +26,9 @@ class ChecksumMismatchError(SeqflowError):
     """A stored md5 does not match the file on disk."""
 
 
+class FileOperationError(SeqflowError):
+    """A bulk file operation was refused or failed a safety check."""
+
+
 class PipelineLaunchError(SeqflowError):
     """Downstream pipeline could not be started."""
