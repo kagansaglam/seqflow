@@ -6,7 +6,17 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -43,7 +53,7 @@ class Sample(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), index=True)
     sample_id: Mapped[str] = mapped_column(String(128))
-    project: Mapped[str | None] = mapped_column(String(128))
+    project: Mapped[str | None] = mapped_column(String(128), index=True)
 
     run: Mapped[Run] = relationship(back_populates="samples")
     libraries: Mapped[list[Library]] = relationship(back_populates="sample", cascade="all, delete-orphan")
@@ -69,7 +79,7 @@ class FastqFile(Base):
     library_id: Mapped[int] = mapped_column(ForeignKey("libraries.id"), index=True)
     path: Mapped[str] = mapped_column(Text, unique=True)
     read: Mapped[str] = mapped_column(String(8))  # R1 | R2 | SE
-    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)  # FASTQ files exceed 2 GiB
     md5: Mapped[str | None] = mapped_column(String(32))
     verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -78,12 +88,17 @@ class FastqFile(Base):
 
 class QCMetric(Base):
     __tablename__ = "qc_metrics"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sample_id", "name", "source", name="uq_qc_metric"),
+        Index("ix_qc_metrics_run_name", "run_id", "name"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), index=True)
     sample_id: Mapped[str | None] = mapped_column(String(128))
     name: Mapped[str] = mapped_column(String(64))
     value: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(32), default="manual", server_default="manual")
 
 
 class PipelineJob(Base):

@@ -26,6 +26,10 @@ class ChecksumMismatchError(SeqflowError):
     """A stored md5 does not match the file on disk."""
 
 
+class QCParseError(SeqflowError):
+    """A QC report (FastQC / MultiQC) is missing, empty or not in the expected format."""
+
+
 class FileOperationError(SeqflowError):
     """A bulk file operation was refused or failed a safety check."""
 

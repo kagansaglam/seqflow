@@ -1,11 +1,13 @@
 """Command-line entry point.
 
 Run management:  seqflow watch | process | summary
+Database:        seqflow db upgrade|downgrade|current | qc-ingest | report ...
 File management: seqflow inventory | archive | prune | rename | dedupe | synth | bench
 """
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import logging
 import os
@@ -15,10 +17,13 @@ from dataclasses import asdict
 from .bench import benchmark, format_markdown
 from .checksum import ChecksumManager
 from .db import Database
+from .exceptions import QCParseError, SeqflowError
 from .filemgr import AuditLog, FileManager
 from .launcher import PipelineLauncher
 from .notify import Notifier
 from .orchestrator import Orchestrator
+from .qc import QCIngestor
+from .reports import Reporter, format_table
 from .synth import generate_fileset
 from .watcher import RunWatcher
 
@@ -91,6 +96,40 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the warm-up read (first row then includes the cold read)")
     be.add_argument("--archive-to", help="also time a verified copy into this new directory")
     be.add_argument("--json", action="store_true", help="print JSON instead of a table")
+
+    qi = sub.add_parser("qc-ingest", help="load FastQC / MultiQC results into the database")
+    qi.add_argument("run_id")
+    qi.add_argument("--fastqc-dir", help="directory with FastQC output (folders or .zip files)")
+    qi.add_argument("--multiqc-stats", help="path to multiqc_general_stats.txt")
+
+    dbp = sub.add_parser("db", help="database schema migrations")
+    dsub = dbp.add_subparsers(dest="db_cmd", required=True)
+    up = dsub.add_parser("upgrade", help="apply migrations (default: up to the latest)")
+    up.add_argument("--revision", default="head")
+    dn = dsub.add_parser("downgrade", help="revert to an earlier revision")
+    dn.add_argument("revision")
+    dsub.add_parser("current", help="show the schema revision of the database")
+
+    rp = sub.add_parser("report", help="query the tracking database")
+    rp.add_argument("--format", choices=["table", "json"], default="table")
+    rsub = rp.add_subparsers(dest="report_cmd", required=True)
+    rsub.add_parser("status", help="number of runs per status")
+    ry = rsub.add_parser("yield", help="runs, samples, files and bytes per project")
+    ry.add_argument("--since", help="only runs detected on or after this date (YYYY-MM-DD)")
+    rsub.add_parser("failed", help="failed runs with their last error")
+    rq = rsub.add_parser("qc", help="all QC metrics of a run, one row per sample")
+    rq.add_argument("run_id")
+    ro = rsub.add_parser("outliers", help="QC outliers by modified z-score (median/MAD)")
+    ro.add_argument("metric")
+    ro.add_argument("--run-id")
+    ro.add_argument("--source", choices=["fastqc", "multiqc", "manual"])
+    ro.add_argument("--threshold", type=float, default=3.5)
+    ro.add_argument("--min-samples", type=int, default=5)
+    re_ = rsub.add_parser("events", help="event log of a run")
+    re_.add_argument("run_id")
+    re_.add_argument("--level", choices=["info", "warning", "error"])
+    rr = rsub.add_parser("run", help="summary, jobs and event counts of one run")
+    rr.add_argument("run_id")
     return p
 
 
@@ -136,14 +175,79 @@ def _run_file_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_db_command(db: Database, args: argparse.Namespace) -> int:
+    if args.db_cmd == "upgrade":
+        db.upgrade(args.revision)
+    elif args.db_cmd == "downgrade":
+        db.downgrade(args.revision)
+    print(f"schema revision: {db.schema_revision()}")
+    return 0
+
+
+def _run_report(db: Database, args: argparse.Namespace) -> int:
+    rep = Reporter(db)
+    cmd = args.report_cmd
+    if cmd == "status":
+        rows = [{"status": s, "runs": n} for s, n in sorted(rep.status_counts().items())]
+    elif cmd == "yield":
+        since = None
+        if args.since:
+            since = dt.datetime.fromisoformat(args.since).replace(tzinfo=dt.timezone.utc)
+        rows = rep.yield_by_project(since)
+    elif cmd == "failed":
+        rows = rep.failed_runs()
+    elif cmd == "qc":
+        rows = rep.qc_table(args.run_id)
+    elif cmd == "outliers":
+        rows = rep.qc_outliers(args.metric, run_id=args.run_id, source=args.source,
+                               threshold=args.threshold, min_samples=args.min_samples)
+    elif cmd == "events":
+        rows = rep.run_events(args.run_id, args.level)
+    else:
+        print(json.dumps(rep.run_report(args.run_id), indent=2))
+        return 0
+    print(json.dumps(rows, indent=2) if args.format == "json" else format_table(rows))
+    return 0
+
+
+def _run_qc_ingest(db: Database, args: argparse.Namespace) -> int:
+    if not (args.fastqc_dir or args.multiqc_stats):
+        raise QCParseError("give --fastqc-dir and/or --multiqc-stats")
+    ingestor = QCIngestor(db)
+    stored = {}
+    if args.fastqc_dir:
+        stored["fastqc"] = ingestor.ingest_fastqc(args.run_id, args.fastqc_dir)
+    if args.multiqc_stats:
+        stored["multiqc"] = ingestor.ingest_multiqc(args.run_id, args.multiqc_stats)
+    print(json.dumps({"run_id": args.run_id, "metrics_stored": stored}, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        return _dispatch(args)
+    except SeqflowError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"error: unknown run {exc}", file=sys.stderr)
+        return 1
+
+
+def _dispatch(args: argparse.Namespace) -> int:
     if args.cmd in FILE_COMMANDS:
         return _run_file_command(args)
 
     db = Database(args.db)
-    db.create_all()
+    if args.cmd == "db":
+        return _run_db_command(db, args)
+    db.upgrade()
+    if args.cmd == "report":
+        return _run_report(db, args)
+    if args.cmd == "qc-ingest":
+        return _run_qc_ingest(db, args)
     if args.cmd == "summary":
         print(json.dumps(db.run_summary(args.run_id), indent=2))
         return 0

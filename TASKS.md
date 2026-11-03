@@ -16,10 +16,11 @@
 - [ ] Resume-safe manifests
 
 ## Phase 3 - Database depth (week 3-4)
-- [ ] Alembic migrations
-- [ ] Parse FastQC/MultiQC output into `qc_metrics`
-- [ ] Reporting queries (per-project yield, failed runs, QC outliers)
-- [ ] PostgreSQL integration tests in CI (service container)
+- [x] Alembic migrations
+- [x] Parse FastQC/MultiQC output into `qc_metrics`
+- [x] Reporting queries (per-project yield, failed runs, QC outliers)
+- [x] PostgreSQL integration tests in CI (service container)
+- [ ] Test the QC parsers against real FastQC/MultiQC output from the real runs
 
 ## Phase 4 - Autonomy + reporting (week 4-5)
 - [ ] systemd unit / cron example, graceful shutdown, lock file

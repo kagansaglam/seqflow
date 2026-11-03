@@ -4,8 +4,25 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python: ["3.10", "3.12"]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: seqflow
+          POSTGRES_PASSWORD: seqflow
+          POSTGRES_DB: seqflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U seqflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SEQFLOW_TEST_PG_URL: postgresql+psycopg2://seqflow:seqflow@localhost:5432/seqflow
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

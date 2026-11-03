@@ -1,10 +1,14 @@
 """Database access layer. One class, one session factory, explicit transactions."""
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
-from sqlalchemy import create_engine, func, select
+from alembic import command
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -15,11 +19,37 @@ RUN_STATES = ("detected", "demultiplexing", "demultiplexed", "verified", "pipeli
 
 class Database:
     def __init__(self, url: str = "sqlite:///seqflow.db", echo: bool = False) -> None:
+        self.url = url
         self.engine: Engine = create_engine(url, echo=echo, future=True)
         self._factory = sessionmaker(self.engine, expire_on_commit=False)
 
     def create_all(self) -> None:
+        """Create tables straight from the models (tests, throw-away databases).
+        Real databases should use upgrade() so the schema history is tracked."""
         Base.metadata.create_all(self.engine)
+
+    # ---- schema migrations ---------------------------------------------
+    def _alembic_config(self) -> Config:
+        cfg = Config()
+        cfg.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
+        return cfg
+
+    def upgrade(self, revision: str = "head") -> None:
+        cfg = self._alembic_config()
+        with self.engine.begin() as conn:
+            cfg.attributes["connection"] = conn
+            command.upgrade(cfg, revision)
+
+    def downgrade(self, revision: str) -> None:
+        cfg = self._alembic_config()
+        with self.engine.begin() as conn:
+            cfg.attributes["connection"] = conn
+            command.downgrade(cfg, revision)
+
+    def schema_revision(self) -> str | None:
+        """Current migration revision of the connected database (None if unversioned)."""
+        with self.engine.connect() as conn:
+            return MigrationContext.configure(conn).get_current_revision()
 
     @contextmanager
     def session(self) -> Iterator[Session]:
@@ -77,10 +107,34 @@ class Database:
             lib = smp.libraries[0]
             lib.fastq_files.append(FastqFile(path=path, read=read, size_bytes=size_bytes, md5=md5))
 
-    def add_qc(self, run_id: str, sample_id: str | None, name: str, value: float) -> None:
+    def add_qc(self, run_id: str, sample_id: str | None, name: str, value: float,
+               source: str = "manual") -> None:
         with self.session() as s:
             run = s.scalar(select(Run).where(Run.run_id == run_id))
-            s.add(QCMetric(run_id=run.id, sample_id=sample_id, name=name, value=value))
+            if run is None:
+                raise KeyError(run_id)
+            s.add(QCMetric(run_id=run.id, sample_id=sample_id, name=name, value=value,
+                           source=source))
+
+    def replace_qc(self, run_id: str, source: str,
+                   rows: Iterable[tuple[str | None, str, float]]) -> int:
+        """Replace all metrics of one source for a run (idempotent re-ingest).
+
+        Repeated (sample, name) pairs in rows collapse to the last value. Returns the
+        number of metric rows stored.
+        """
+        with self.session() as s:
+            run = s.scalar(select(Run).where(Run.run_id == run_id))
+            if run is None:
+                raise KeyError(run_id)
+            s.execute(delete(QCMetric).where(QCMetric.run_id == run.id,
+                                             QCMetric.source == source))
+            unique = {(sid, name): value for sid, name, value in rows}
+            s.add_all(
+                QCMetric(run_id=run.id, sample_id=sid, name=name, value=value, source=source)
+                for (sid, name), value in unique.items()
+            )
+            return len(unique)
 
     def add_job(self, run_id: str, name: str, command: str) -> int:
         with self.session() as s:
@@ -96,7 +150,7 @@ class Database:
             return list(s.scalars(select(Run).where(Run.status == status)))
 
     def run_summary(self, run_id: str) -> dict:
-        """Aggregate query across 4 tables: samples, FASTQ count, total size, mean QC."""
+        """Sample count, FASTQ count and total bytes of a run (joins runs/samples/libraries/fastq)."""
         with self.session() as s:
             run = s.scalar(select(Run).where(Run.run_id == run_id))
             if run is None:

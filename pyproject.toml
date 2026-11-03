@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "sqlalchemy>=2.0",
+    "alembic>=1.13",
     "psycopg2-binary>=2.9",
     "pyyaml>=6.0",
 ]
@@ -23,9 +24,13 @@ seqflow = "seqflow.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"seqflow.migrations" = ["script.py.mako"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --cov=seqflow --cov-report=term-missing"
+markers = ["postgres: needs a PostgreSQL server (set SEQFLOW_TEST_PG_URL)"]
 
 [tool.ruff]
 line-length = 100

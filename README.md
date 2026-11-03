@@ -22,6 +22,9 @@ run folder appears -> validate SampleSheet -> demultiplex (Illumina / ONT)
 | `filemgr.py` | `FileManager`, `AuditLog` | Inventory, md5-verified archiving, guarded delete, batch rename, duplicate finder, JSONL audit log |
 | `synth.py` | `generate_fileset` | Deterministic synthetic FASTQ-like file sets for benchmarks (not real data) |
 | `bench.py` | `benchmark` | Read-only md5 throughput benchmark with host info |
+| `migrations/` | Alembic | Versioned schema: 0001 initial, 0002 BIGINT file sizes + QC source/uniqueness |
+| `qc.py` | `QCIngestor` | Parse FastQC (folders or .zip) and MultiQC general stats into `qc_metrics`, idempotently |
+| `reports.py` | `Reporter` | Yield per project, failed runs, QC outliers (median/MAD), event log, run report |
 
 ## Bulk file management
 
@@ -41,6 +44,41 @@ the source of an archive is removed only after every copy passes md5 verificatio
 deletion refuses paths outside the given root and validates the whole list before
 removing anything; symlinks are never followed.
 
+## Database, QC and reports
+
+```bash
+seqflow db upgrade                                  # create / migrate the schema
+seqflow db current
+seqflow qc-ingest RUN_ID --fastqc-dir qc/ --multiqc-stats multiqc_data/multiqc_general_stats.txt
+seqflow report status
+seqflow report yield --since 2026-01-01             # runs, samples, files, bytes per project
+seqflow report failed                               # failed runs with their last error
+seqflow report qc RUN_ID                            # one row per sample, one column per metric
+seqflow report outliers R1.percent_gc               # modified z-score, needs >= 5 values
+seqflow report --format json run RUN_ID
+```
+
+Schema changes go through Alembic. `tests/test_migrations.py` fails if a model changes
+without a matching migration. Every command that touches the database applies pending
+migrations first. File sizes are stored as BIGINT: with the original 32-bit column
+PostgreSQL rejects any FASTQ above 2 GiB (`integer out of range`).
+
+QC ingestion replaces the previous rows of the same source for a run, so re-running it
+never duplicates metrics. FastQC metrics are stored per read (`R1.total_sequences`,
+`R2.percent_gc`, ...). Outliers use the modified z-score (median and MAD) because mean
+and standard deviation are unreliable with a handful of samples.
+
+## Tests
+
+```bash
+pytest                                              # SQLite, PostgreSQL tests are skipped
+docker compose up -d db
+SEQFLOW_TEST_PG_URL=postgresql+psycopg2://seqflow:seqflow@localhost:5432/seqflow pytest
+```
+
+PostgreSQL tests run in a throw-away schema per test. CI runs the full suite against a
+PostgreSQL 16 service container on Python 3.10 and 3.12.
+
 ## Quick start
 
 ```bash
@@ -48,6 +86,7 @@ pip install -e ".[dev]"
 pytest                                   # SQLite in-memory, no sequencer data needed
 docker compose up -d db                  # PostgreSQL
 export SEQFLOW_DB=postgresql+psycopg2://seqflow:seqflow@localhost/seqflow
+seqflow db upgrade
 seqflow watch /data/runs --platform illumina
 ```
 
