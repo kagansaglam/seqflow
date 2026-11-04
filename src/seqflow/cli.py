@@ -1,6 +1,6 @@
 """Command-line entry point.
 
-Run management:  seqflow watch | process | summary | requeue | digest | health
+Run management:  seqflow watch | process | register | summary | requeue | digest | health
 Database:        seqflow db upgrade|downgrade|current | qc-ingest | report ...
 File management: seqflow inventory | archive | prune | rename | dedupe | synth | bench
 """
@@ -27,6 +27,7 @@ from .lock import LockFile
 from .notify import notifier_from_env
 from .orchestrator import Orchestrator
 from .qc import QCIngestor
+from .register import Registrar
 from .reports import Reporter, format_table
 from .synth import generate_fileset
 from .watcher import RunWatcher, check_heartbeat, install_signal_handlers
@@ -52,6 +53,15 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--platform", choices=["illumina", "ont"], required=True)
     pr.add_argument("--no-launch", action="store_true", help="do not start the downstream pipeline")
     pr.add_argument("--output-root", default="fastq", help="where demultiplexed FASTQ files go")
+
+    rg = sub.add_parser("register", help="record existing FASTQ files (md5, size, gzip check, "
+                                         "read count) without demultiplexing")
+    rg.add_argument("run_id")
+    rg.add_argument("directory")
+    rg.add_argument("--platform", choices=["illumina", "ont", "pacbio"], default="illumina")
+    rg.add_argument("--project")
+    rg.add_argument("--pattern", default="*.f*q.gz")
+    rg.add_argument("--workers", type=int, default=4, help="md5 threads")
 
     s = sub.add_parser("summary", help="print a JSON summary for a run")
     s.add_argument("run_id")
@@ -147,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     ro = rsub.add_parser("outliers", help="QC outliers by modified z-score (median/MAD)")
     ro.add_argument("metric")
     ro.add_argument("--run-id")
-    ro.add_argument("--source", choices=["fastqc", "multiqc", "manual"])
+    ro.add_argument("--source", choices=["fastqc", "multiqc", "seqflow", "manual"])
     ro.add_argument("--threshold", type=float, default=3.5)
     ro.add_argument("--min-samples", type=int, default=5)
     re_ = rsub.add_parser("events", help="event log of a run")
@@ -319,6 +329,11 @@ def _dispatch(args: argparse.Namespace) -> int:
             return _run_qc_ingest(db, args)
         if args.cmd == "digest":
             return _run_digest(db, args)
+        if args.cmd == "register":
+            res = Registrar(db, ChecksumManager(workers=args.workers)).register(
+                args.run_id, args.directory, args.platform, args.project, args.pattern)
+            print(json.dumps(asdict(res), indent=2))
+            return 1 if res.problems else 0
         if args.cmd == "summary":
             print(json.dumps(db.run_summary(args.run_id), indent=2))
             return 0

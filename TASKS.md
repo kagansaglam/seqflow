@@ -4,6 +4,8 @@
 - [x] Package layout, schema, orchestrator, mocked-tool tests, CI
 
 ## Phase 1 - Real-data validation (week 1-2)
+- [x] `seqflow register` for already existing FASTQ files (md5, gzip check, read counts)
+- [ ] Register a real public FASTQ data set (ENA/SRA) and record accession, file count and size here
 - [ ] Find small public Illumina test run (BCL) and run `bcl-convert` for real
 - [ ] Public ONT pod5 sample + `dorado demux`
 - [ ] Integration test marked `@pytest.mark.integration` (skipped without tools)

@@ -17,7 +17,7 @@ from .db import Database
 from .exceptions import QCParseError
 
 _READ_NAME = re.compile(
-    r"^(?P<sample>.+?)(?:_S\d+)?(?:_L\d{3})?_(?P<read>R[12])(?:_001)?$"
+    r"^(?P<sample>.+?)(?:_S\d+)?(?:_L\d{3})?_(?P<read>R?[12])(?:_001)?$"
 )
 _FASTQ_SUFFIX = re.compile(r"\.(fastq|fq)(\.gz)?$", re.IGNORECASE)
 
@@ -32,12 +32,16 @@ class FastQCResult:
 
 
 def split_sample_and_read(filename: str) -> tuple[str, str]:
-    """'S1_S1_L001_R2_001.fastq.gz' -> ('S1', 'R2'); unpaired names give read 'SE'."""
+    """'S1_S1_L001_R2_001.fastq.gz' -> ('S1', 'R2'), 'SRR1_2.fastq.gz' -> ('SRR1', 'R2');
+    names without a read number give read 'SE'."""
     stem = re.sub(r"\.zip$", "", Path(filename).name)
     stem = re.sub(r"_fastqc$", "", stem)
     stem = _FASTQ_SUFFIX.sub("", stem)
     m = _READ_NAME.match(stem)
-    return (m.group("sample"), m.group("read")) if m else (stem, "SE")
+    if not m:
+        return stem, "SE"
+    read = m.group("read")  # ENA/SRA style 'SRR123_1.fastq.gz' means R1
+    return m.group("sample"), read if read.startswith("R") else f"R{read}"
 
 
 def _number(text: str) -> float | None:

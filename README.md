@@ -26,6 +26,7 @@ run folder appears -> validate SampleSheet -> demultiplex (Illumina / ONT)
 | `synth.py` | `generate_fileset` | Deterministic synthetic FASTQ-like file sets for benchmarks (not real data) |
 | `bench.py` | `benchmark` | Read-only md5 throughput benchmark with host info |
 | `migrations/` | Alembic | Versioned schema: 0001 initial, 0002 BIGINT file sizes + QC source/uniqueness |
+| `register.py` | `Registrar` | Record existing FASTQ files: md5, size, gzip integrity, read count; no copying |
 | `qc.py` | `QCIngestor` | Parse FastQC (folders or .zip) and MultiQC general stats into `qc_metrics`, idempotently |
 | `reports.py` | `Reporter` | Yield per project, failed runs, QC outliers (median/MAD), event log, run report |
 
@@ -116,6 +117,19 @@ Limits worth knowing:
 * Slack and SMTP delivery is tested against fake servers, not against real services.
 * The `bcl-convert` call is tested with a stand-in script (`tests/test_end_to_end.py`), not
   with the real tool.
+
+## Registering existing FASTQ files
+
+```bash
+seqflow register SRP123456 /data/public/SRP123456 --project public
+seqflow report yield
+seqflow report qc SRP123456                  # R1.reads_counted / R2.reads_counted per sample
+```
+
+Every file is hashed, fully decompressed once (corrupt or truncated gzip and line counts
+that are not a multiple of 4 mark the run `failed`) and stored with its read count.
+ENA/SRA names (`SRR123_1.fastq.gz`) and Illumina names (`S1_S1_L001_R1_001.fastq.gz`) are
+both understood. Running it again updates rows instead of duplicating them.
 
 ## Database, QC and reports
 
