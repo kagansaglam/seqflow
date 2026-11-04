@@ -91,10 +91,10 @@ def test_release_leaves_a_lock_owned_by_someone_else(tmp_path):
 
 
 CHILD = """
-import sys
+import os, sys
 from seqflow.lock import LockFile
 with LockFile(sys.argv[1]):
-    print("ready", flush=True)
+    print("ready", os.getpid(), flush=True)
     sys.stdin.readline()
 """
 
@@ -104,8 +104,11 @@ def test_lock_works_across_real_processes(tmp_path):
     child = subprocess.Popen([sys.executable, "-c", CHILD, str(path)], stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, text=True)
     try:
-        assert child.stdout.readline().strip() == "ready"
-        with pytest.raises(LockHeldError, match=str(child.pid)):
+        word, holder_pid = child.stdout.readline().split()
+        assert word == "ready"
+        # On Windows a venv python.exe is a launcher, so Popen.pid is not the pid of the
+        # process that holds the lock; the child reports its own.
+        with pytest.raises(LockHeldError, match=holder_pid):
             LockFile(path).acquire()
     finally:
         child.communicate("\n", timeout=30)
