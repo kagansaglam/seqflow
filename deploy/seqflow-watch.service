@@ -1,0 +1,25 @@
+# Runs the run watcher as a service. Adjust User, paths and platform, then:
+#   sudo cp seqflow-watch.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now seqflow-watch
+[Unit]
+Description=seqflow run watcher
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=seqflow
+EnvironmentFile=/etc/seqflow/seqflow.env
+ExecStart=/opt/seqflow/.venv/bin/seqflow watch /data/runs --platform illumina --interval 60
+Restart=on-failure
+RestartSec=30
+# On stop, send SIGTERM to the watcher only. It finishes the run it is working on and
+# exits; the demultiplexer child keeps running until then. (The default,
+# KillMode=control-group, would SIGTERM the demultiplexer too and fail the run.)
+KillMode=mixed
+KillSignal=SIGTERM
+# A demultiplexing job can take hours; give it time before systemd sends SIGKILL.
+TimeoutStopSec=6h
+
+[Install]
+WantedBy=multi-user.target

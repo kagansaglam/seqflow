@@ -16,9 +16,12 @@ run folder appears -> validate SampleSheet -> demultiplex (Illumina / ONT)
 | `checksum.py` | `ChecksumManager` | Parallel md5, manifests, verification, all-or-nothing bulk rename |
 | `db.py` / `models.py` | `Database` | 7-table schema (runs, samples, libraries, fastq_files, qc_metrics, pipeline_jobs, events) |
 | `launcher.py` | `PipelineLauncher` | Start downstream Nextflow pipeline |
-| `notify.py` | `Notifier` | Log / email; warnings vs errors |
+| `notify.py` | `Notifier`, `SlackChannel`, `EmailChannel` | Log, Slack webhook, SMTP; errors alert, retries with backoff, credentials only from the environment |
 | `orchestrator.py` | `Orchestrator` | State machine tying the steps together |
-| `watcher.py` | `RunWatcher` | Poll a directory, retry incomplete runs |
+| `watcher.py` | `RunWatcher` | Poll a directory; error isolation per run, graceful SIGINT/SIGTERM stop, heartbeat file |
+| `lock.py` | `LockFile` | Single-instance PID lock, takes over locks of dead processes |
+| `retry.py` | `retry_call` | Exponential backoff with jitter |
+| `digest.py` | `build_digest` | Daily summary: new runs, yield, failed and stuck runs |
 | `filemgr.py` | `FileManager`, `AuditLog` | Inventory, md5-verified archiving, guarded delete, batch rename, duplicate finder, JSONL audit log |
 | `synth.py` | `generate_fileset` | Deterministic synthetic FASTQ-like file sets for benchmarks (not real data) |
 | `bench.py` | `benchmark` | Read-only md5 throughput benchmark with host info |
@@ -66,6 +69,53 @@ No speedup factor is reported. Single-thread timings of the same work varied bet
 mostly measure the baseline's instability. `seqflow bench` therefore interleaves the
 worker counts round by round, prints min / median / max, and warns when a speedup
 exceeds what the thread count allows or when timings vary by more than 25 %.
+
+## Running unattended
+
+```bash
+seqflow watch /data/runs --platform illumina --output-root /data/fastq
+seqflow health --heartbeat-file /data/runs/.seqflow-heartbeat.json --max-age 300   # exit 0 = alive
+seqflow digest --hours 24                           # summary to Slack / e-mail (--print to just show it)
+seqflow requeue RUN_ID                              # let the watcher retry a failed run
+```
+
+What the watcher does by itself:
+
+* **One instance only.** A PID lock file (`WATCH_DIR/.seqflow.lock`) stops a second watcher
+  from demultiplexing the same run. A lock left by a crashed process is taken over.
+* **Crash recovery.** On start, runs left in `demultiplexing`/`demultiplexed`/`verified`/
+  `pipeline_running` by a dead process are reset and processed again (with a warning event).
+* **Unfinished runs.** A run without its completion marker is re-checked every poll, with one
+  warning event and one notification, not one per poll.
+* **Failures are isolated and recorded.** A failing run is marked `failed` with its error in
+  the event log and an alert; an unexpected exception is treated the same way, so a bug in one
+  run does not stop the others. A scan that fails as a whole (for example an unmounted share)
+  is reported once and retried, and a "recovered" message follows.
+* **Graceful stop.** SIGINT/SIGTERM (Ctrl+C, `systemctl stop`) let the current run finish,
+  then the watcher exits and removes its lock. A second signal kills it immediately.
+* **Heartbeat.** `WATCH_DIR/.seqflow-heartbeat.json` is rewritten after every scan, so
+  `seqflow health` (or cron) can tell a hung watcher from a healthy one.
+
+Alerts and the digest are configured with environment variables only (webhook URL and SMTP
+password never appear on the command line or in the database); see
+`deploy/seqflow.env.example`. Errors go to Slack and e-mail, warnings only to the log, the
+digest to all channels. Sending is retried with backoff for network errors and HTTP 5xx, not
+for HTTP 4xx.
+
+`deploy/` has a systemd unit for the watcher (`KillMode=mixed`, long stop timeout), a
+service and timer for the daily digest, and a crontab alternative.
+
+Limits worth knowing:
+
+* Ctrl+C in a terminal also reaches the demultiplexer started by the watcher (same process
+  group), so that run is marked `failed`; `seqflow requeue` sends it back. The provided
+  systemd unit is set up to avoid this (`KillMode=mixed`), but it has not been run under a
+  real systemd.
+* Two starts at the very same instant that both find a stale lock can still race. This needs
+  a crashed holder and simultaneous starts.
+* Slack and SMTP delivery is tested against fake servers, not against real services.
+* The `bcl-convert` call is tested with a stand-in script (`tests/test_end_to_end.py`), not
+  with the real tool.
 
 ## Database, QC and reports
 

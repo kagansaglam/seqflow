@@ -23,8 +23,10 @@
 - [ ] Test the QC parsers against real FastQC/MultiQC output from the real runs
 
 ## Phase 4 - Autonomy + reporting (week 4-5)
-- [ ] systemd unit / cron example, graceful shutdown, lock file
-- [ ] Email + Slack channels, daily digest
+- [x] systemd unit / cron example, graceful shutdown, lock file, heartbeat, crash recovery
+- [x] Email + Slack channels with retries, daily digest
+- [ ] Send one real Slack message and one real e-mail through the configured channels
+- [ ] Run the watcher with the real bcl-convert on a real run folder
 - [ ] Nextflow RNA-seq/ATAC modules as the downstream pipeline
 
 ## Phase 5 - Polish (week 6)

@@ -1,0 +1,5 @@
+# Alternative to systemd on machines without it. Edit with: crontab -e
+# Needs the variables of seqflow.env in the environment, e.g. via a wrapper script.
+30 7 * * *   /opt/seqflow/.venv/bin/seqflow digest --hours 24
+# Alert when the watcher stops writing its heartbeat (no output on success):
+*/10 * * * * /opt/seqflow/.venv/bin/seqflow health --heartbeat-file /data/runs/.seqflow-heartbeat.json --max-age 600 > /dev/null || echo "seqflow watcher is not running" | mail -s "seqflow down" lab-bioinfo@example.org

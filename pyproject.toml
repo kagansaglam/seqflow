@@ -32,5 +32,10 @@ testpaths = ["tests"]
 addopts = "-q --cov=seqflow --cov-report=term-missing"
 markers = ["postgres: needs a PostgreSQL server (set SEQFLOW_TEST_PG_URL)"]
 
+[tool.coverage.run]
+# Migration scripts are executed by test_migrations.py (SQLite) and test_postgres.py
+# (PostgreSQL); line coverage of them is not meaningful.
+omit = ["*/seqflow/migrations/*"]
+
 [tool.ruff]
 line-length = 100

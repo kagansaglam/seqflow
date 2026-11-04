@@ -33,9 +33,19 @@ class ChecksumManager:
         sums = self.compute_many(files)
         manifest = directory / "md5sum.txt"
         manifest.write_text(
-            "".join(f"{sums[str(f)]}  {f.relative_to(directory)}\n" for f in files)
+            "".join(f"{sums[str(f)]}  {f.relative_to(directory).as_posix()}\n" for f in files)
         )
         return manifest
+
+    @staticmethod
+    def read_manifest(manifest: str | Path) -> dict[str, str]:
+        """Parse an md5sum-style manifest into {relative posix path: md5}."""
+        out = {}
+        for line in Path(manifest).read_text().splitlines():
+            if line.strip():
+                md5, rel = line.split(None, 1)
+                out[rel.strip()] = md5
+        return out
 
     def verify_manifest(self, manifest: str | Path) -> list[str]:
         """Return list of failure descriptions; empty list means all OK."""

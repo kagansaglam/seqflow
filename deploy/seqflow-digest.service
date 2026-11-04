@@ -1,0 +1,9 @@
+[Unit]
+Description=seqflow daily digest
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=seqflow
+EnvironmentFile=/etc/seqflow/seqflow.env
+ExecStart=/opt/seqflow/.venv/bin/seqflow digest --hours 24

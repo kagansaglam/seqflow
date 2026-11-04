@@ -9,7 +9,7 @@ import abc
 import subprocess
 from pathlib import Path
 
-from .exceptions import DemuxError
+from .exceptions import DemuxError, RunIncompleteError
 from .samplesheet import SampleSheet
 
 
@@ -36,11 +36,13 @@ class Demultiplexer(abc.ABC):
 
     def run(self) -> list[Path]:
         if not self.is_run_complete():
-            from .exceptions import RunIncompleteError
             raise RunIncompleteError(f"run not complete: {self.run_dir}")
         self.out_dir.mkdir(parents=True, exist_ok=True)
         cmd = self.build_command()
-        proc = self._run(cmd)
+        try:
+            proc = self._run(cmd)
+        except OSError as exc:  # tool not installed, not executable, ...
+            raise DemuxError(f"cannot run {cmd[0]}: {exc}") from exc
         if proc.returncode != 0:
             raise DemuxError(f"{cmd[0]} exited {proc.returncode}: {proc.stderr[-500:]}")
         fastqs = sorted(self.out_dir.rglob("*.fastq.gz"))

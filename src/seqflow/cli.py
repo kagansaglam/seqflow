@@ -1,6 +1,6 @@
 """Command-line entry point.
 
-Run management:  seqflow watch | process | summary
+Run management:  seqflow watch | process | summary | requeue | digest | health
 Database:        seqflow db upgrade|downgrade|current | qc-ingest | report ...
 File management: seqflow inventory | archive | prune | rename | dedupe | synth | bench
 """
@@ -12,20 +12,24 @@ import json
 import logging
 import os
 import sys
+import threading
 from dataclasses import asdict
+from pathlib import Path
 
 from .bench import benchmark, format_markdown
 from .checksum import ChecksumManager
 from .db import Database
+from .digest import build_digest
 from .exceptions import QCParseError, SeqflowError
 from .filemgr import AuditLog, FileManager
 from .launcher import PipelineLauncher
-from .notify import Notifier
+from .lock import LockFile
+from .notify import notifier_from_env
 from .orchestrator import Orchestrator
 from .qc import QCIngestor
 from .reports import Reporter, format_table
 from .synth import generate_fileset
-from .watcher import RunWatcher
+from .watcher import RunWatcher, check_heartbeat, install_signal_handlers
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,14 +41,35 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("watch_dir")
     w.add_argument("--platform", choices=["illumina", "ont"], required=True)
     w.add_argument("--interval", type=float, default=60.0)
-    w.add_argument("--no-launch", action="store_true")
+    w.add_argument("--no-launch", action="store_true", help="do not start the downstream pipeline")
+    w.add_argument("--output-root", default="fastq", help="where demultiplexed FASTQ files go")
+    w.add_argument("--lock-file", help="single-instance lock (default: WATCH_DIR/.seqflow.lock)")
+    w.add_argument("--heartbeat-file",
+                   help="written after every scan (default: WATCH_DIR/.seqflow-heartbeat.json)")
 
     pr = sub.add_parser("process", help="process a single run directory")
     pr.add_argument("run_dir")
     pr.add_argument("--platform", choices=["illumina", "ont"], required=True)
+    pr.add_argument("--no-launch", action="store_true", help="do not start the downstream pipeline")
+    pr.add_argument("--output-root", default="fastq", help="where demultiplexed FASTQ files go")
 
     s = sub.add_parser("summary", help="print a JSON summary for a run")
     s.add_argument("run_id")
+
+    rq_ = sub.add_parser("requeue", help="send a failed run back to the watcher")
+    rq_.add_argument("run_id")
+    rq_.add_argument("--force", action="store_true", help="also allow runs that are done")
+
+    dg = sub.add_parser("digest", help="summarise the last hours and send it to the alert channels")
+    dg.add_argument("--hours", type=float, default=24.0)
+    dg.add_argument("--stale-hours", type=float, default=12.0,
+                    help="in-flight runs without progress for this long count as stuck")
+    dg.add_argument("--print", dest="print_only", action="store_true",
+                    help="print instead of sending")
+
+    hl = sub.add_parser("health", help="exit 0 if the watcher heartbeat is recent, else 1")
+    hl.add_argument("--heartbeat-file", required=True)
+    hl.add_argument("--max-age", type=float, default=300.0, help="seconds (default 300)")
 
     def add_common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--pattern", default="*", help="file name glob (default: all files)")
@@ -236,27 +261,78 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _run_watch(db: Database, args: argparse.Namespace) -> int:
+    watch_dir = Path(args.watch_dir)
+    lock_path = args.lock_file or watch_dir / ".seqflow.lock"
+    beat_path = args.heartbeat_file or watch_dir / ".seqflow-heartbeat.json"
+    notifier = notifier_from_env()
+    launcher = None if args.no_launch else PipelineLauncher()
+    orch = Orchestrator(db, notifier, launcher, output_root=args.output_root)
+    stop = threading.Event()
+    with LockFile(lock_path):
+        restore = install_signal_handlers(stop)
+        try:
+            recovered = orch.recover_interrupted()
+            if recovered:
+                logging.getLogger("seqflow").warning("recovered interrupted runs: %s", recovered)
+            watcher = RunWatcher(watch_dir, args.platform, db, orch, args.interval, stop=stop,
+                                 heartbeat_path=beat_path, notifier=notifier)
+            logging.getLogger("seqflow").info("watching %s (pid %s)", watch_dir, os.getpid())
+            watcher.run()
+            logging.getLogger("seqflow").info("stopped after %d scan(s)", watcher.cycles)
+        finally:
+            restore()
+    return 0
+
+
+def _run_digest(db: Database, args: argparse.Namespace) -> int:
+    level, subject, body = build_digest(db, hours=args.hours, stale_hours=args.stale_hours)
+    if args.print_only:
+        print(f"{subject}\n\n{body}")
+        return 0
+    notifier = notifier_from_env()
+    if not notifier.alert_channels:
+        print("no alert channel configured (set SEQFLOW_SLACK_WEBHOOK and/or SEQFLOW_SMTP_HOST + "
+              "SEQFLOW_MAIL_TO); use --print to just show the digest", file=sys.stderr)
+        return 1
+    notifier.notify_all(level, subject, body)
+    print(f"sent: {subject}")
+    return 0
+
+
 def _dispatch(args: argparse.Namespace) -> int:
     if args.cmd in FILE_COMMANDS:
         return _run_file_command(args)
+    if args.cmd == "health":
+        healthy, message = check_heartbeat(args.heartbeat_file, args.max_age)
+        print(message, file=sys.stdout if healthy else sys.stderr)
+        return 0 if healthy else 1
 
     db = Database(args.db)
-    if args.cmd == "db":
-        return _run_db_command(db, args)
-    db.upgrade()
-    if args.cmd == "report":
-        return _run_report(db, args)
-    if args.cmd == "qc-ingest":
-        return _run_qc_ingest(db, args)
-    if args.cmd == "summary":
-        print(json.dumps(db.run_summary(args.run_id), indent=2))
-        return 0
-    launcher = None if getattr(args, "no_launch", False) else PipelineLauncher()
-    orch = Orchestrator(db, Notifier(), launcher)
-    if args.cmd == "process":
+    try:
+        if args.cmd == "db":
+            return _run_db_command(db, args)
+        db.upgrade()
+        if args.cmd == "report":
+            return _run_report(db, args)
+        if args.cmd == "qc-ingest":
+            return _run_qc_ingest(db, args)
+        if args.cmd == "digest":
+            return _run_digest(db, args)
+        if args.cmd == "summary":
+            print(json.dumps(db.run_summary(args.run_id), indent=2))
+            return 0
+        if args.cmd == "requeue":
+            previous = db.requeue(args.run_id, force=args.force)
+            print(f"{args.run_id}: {previous} -> detected")
+            return 0
+        if args.cmd == "watch":
+            return _run_watch(db, args)
+        launcher = None if args.no_launch else PipelineLauncher()
+        orch = Orchestrator(db, notifier_from_env(), launcher, output_root=args.output_root)
         return 0 if orch.process_run(args.run_dir, args.platform) == "done" else 1
-    RunWatcher(args.watch_dir, args.platform, db, orch, args.interval).loop()
-    return 0
+    finally:
+        db.engine.dispose()
 
 
 if __name__ == "__main__":

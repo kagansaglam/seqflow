@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from sqlalchemy import func, select
 
-from .db import Database
+from .db import IN_FLIGHT_STATES, Database
 from .models import Event, FastqFile, Library, PipelineJob, QCMetric, Run, Sample
 
 NO_PROJECT = "(none)"
@@ -22,10 +22,13 @@ class Reporter:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    def status_counts(self) -> dict[str, int]:
+    def status_counts(self, since: dt.datetime | None = None) -> dict[str, int]:
+        """Runs per status; with since, only runs first detected at or after that time."""
+        stmt = select(Run.status, func.count(Run.id)).group_by(Run.status)
+        if since is not None:
+            stmt = stmt.where(Run.detected_at >= since)
         with self.db.session() as s:
-            rows = s.execute(select(Run.status, func.count(Run.id)).group_by(Run.status))
-            return {status: n for status, n in rows}
+            return {status: n for status, n in s.execute(stmt)}
 
     def yield_by_project(self, since: dt.datetime | None = None) -> list[dict]:
         """Runs, samples, FASTQ files and bytes per project (samples without files included)."""
@@ -53,8 +56,9 @@ class Reporter:
                 for project, runs, samples, files, total in s.execute(stmt)
             ]
 
-    def failed_runs(self) -> list[dict]:
-        """Failed runs with their most recent error message, newest first."""
+    def failed_runs(self, since: dt.datetime | None = None) -> list[dict]:
+        """Failed runs with their most recent error message, newest first.
+        With since, only runs whose last update is at or after that time."""
         last_error = (
             select(func.max(Event.id))
             .where(Event.run_id == Run.id, Event.level == "error")
@@ -67,9 +71,30 @@ class Reporter:
             .where(Run.status == "failed")
             .order_by(Run.updated_at.desc(), Run.run_id)
         )
+        if since is not None:
+            stmt = stmt.where(Run.updated_at >= since)
         with self.db.session() as s:
             return [{"run_id": rid, "platform": plat, "updated_at": _iso(upd), "error": msg}
                     for rid, plat, upd, msg in s.execute(stmt)]
+
+    def stale_runs(self, older_than: dt.datetime) -> list[dict]:
+        """Runs still in an in-flight state whose last update is before older_than.
+        While a watcher is alive these are runs that look stuck."""
+        stmt = (
+            select(Run.run_id, Run.status, Run.updated_at)
+            .where(Run.status.in_(IN_FLIGHT_STATES), Run.updated_at < older_than)
+            .order_by(Run.updated_at, Run.run_id)
+        )
+        with self.db.session() as s:
+            return [{"run_id": rid, "status": st, "updated_at": _iso(upd)}
+                    for rid, st, upd in s.execute(stmt)]
+
+    def event_counts(self, since: dt.datetime) -> dict[str, int]:
+        """Number of events per level since the given time."""
+        with self.db.session() as s:
+            return dict(s.execute(
+                select(Event.level, func.count(Event.id))
+                .where(Event.created_at >= since).group_by(Event.level)).all())
 
     def qc_table(self, run_id: str) -> list[dict]:
         """One row per sample with every stored metric as a column."""
