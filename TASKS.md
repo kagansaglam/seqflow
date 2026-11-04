@@ -12,7 +12,7 @@
 ## Phase 2 - Bulk file management (week 2-3)
 - [x] Archive / delete / rename with dry-run + audit log
 - [x] Synthetic file-set generator and md5 benchmark tooling
-- [ ] Run the benchmark on a large set on your own machine and record the table in README
+- [x] Run the benchmark on large sets and record the results in the README
 - [ ] Resume-safe manifests
 
 ## Phase 3 - Database depth (week 3-4)

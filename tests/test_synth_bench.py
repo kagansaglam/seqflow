@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from seqflow.bench import benchmark, format_markdown, speedup_warnings
+from seqflow.bench import benchmark, format_markdown, speedup_warnings, spread_warnings
 from seqflow.checksum import ChecksumManager
 from seqflow.cli import main
 from seqflow.synth import MARKER, generate_fileset
@@ -71,6 +71,38 @@ def test_speedup_warnings_flags_superlinear_only():
     assert speedup_warnings(ok) == []
     assert "6.8x speedup" in speedup_warnings(bad)[0]
     assert speedup_warnings([]) == []
+
+
+def test_benchmark_rows_have_min_median_max_and_spread(tmp_path):
+    generate_fileset(tmp_path / "d", 10, min_bytes=1000, max_bytes=2000)
+    res = benchmark(tmp_path / "d", workers=(1, 2, 4), repeats=4)
+    for r in res["md5"]:
+        assert r["seconds_min"] <= r["seconds_median"] <= r["seconds_max"]
+        assert r["spread_pct"] >= 0
+    table = format_markdown(res)
+    assert "min (s)" in table and "max (s)" in table
+
+
+def test_benchmark_runs_every_worker_count_every_round(tmp_path, monkeypatch):
+    generate_fileset(tmp_path / "d", 4, min_bytes=100, max_bytes=200)
+    seen = []
+    real = ChecksumManager.compute_many
+
+    def spy(self, paths):
+        seen.append(self.workers)
+        return real(self, paths)
+
+    monkeypatch.setattr(ChecksumManager, "compute_many", spy)
+    benchmark(tmp_path / "d", workers=(1, 2, 4), repeats=3, warmup=False)
+    assert sorted(seen) == [1, 1, 1, 2, 2, 2, 4, 4, 4]
+    assert seen[:3] == [1, 2, 4] and seen[3:6] == [2, 4, 1] and seen[6:] == [4, 1, 2]
+
+
+def test_spread_warnings():
+    stable = [{"workers": 1, "spread_pct": 10.0, "seconds_min": 1, "seconds_max": 1.1}]
+    shaky = [{"workers": 2, "spread_pct": 60.0, "seconds_min": 1.0, "seconds_max": 1.6}]
+    assert spread_warnings(stable) == []
+    assert "2 workers" in spread_warnings(shaky)[0] and "60.0%" in spread_warnings(shaky)[0]
 
 
 def test_synth_progress_callback(tmp_path):

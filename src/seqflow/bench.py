@@ -4,9 +4,9 @@ Read-only by default: it never writes into the benchmarked directory. Archiving 
 benchmarked only when an explicit destination is given.
 
 Method: one warm-up read of all files (reported separately as the first read), then
-`repeats` timed passes per worker count; the median is reported. The tool also flags
-speedups that exceed what the worker count could explain, which usually means the
-baseline row was not measured in steady state.
+`repeats` interleaved rounds (every worker count once per round, order rotated); the
+median, minimum and maximum are reported. The tool flags speedups that exceed what the
+worker count could explain and rows whose timings are unstable.
 """
 from __future__ import annotations
 
@@ -50,6 +50,15 @@ def speedup_warnings(rows: list[dict]) -> list[str]:
     return out
 
 
+def spread_warnings(rows: list[dict], limit_pct: float = 25.0) -> list[str]:
+    """Flag rows whose repeated timings differ by more than limit_pct of the median."""
+    return [
+        f"{r['workers']} workers: timings varied by {r['spread_pct']}% of the median "
+        f"(min {r['seconds_min']} s, max {r['seconds_max']} s); the median is not stable."
+        for r in rows if r["spread_pct"] > limit_pct
+    ]
+
+
 def benchmark(root: str | Path, *, workers: Sequence[int] = (1, 2, 4, 8),
               pattern: str = "*.fastq.gz", repeats: int = 3, warmup: bool = True,
               archive_to: str | Path | None = None,
@@ -72,29 +81,38 @@ def benchmark(root: str | Path, *, workers: Sequence[int] = (1, 2, 4, 8),
         ChecksumManager(workers=max(workers)).compute_many(files)
         first_read = round(time.perf_counter() - t, 3)
 
+    # Rounds are interleaved (every worker count once per round, order rotated each
+    # round) so that drifts in CPU frequency or background load hit all rows alike.
+    say(f"{repeats} interleaved round(s) over workers {list(workers)} ...")
+    timings: dict[int, list[float]] = {w: [] for w in workers}
+    for rnd in range(repeats):
+        order = list(workers[rnd % len(workers):]) + list(workers[:rnd % len(workers)])
+        for w in order:
+            cm = ChecksumManager(workers=w)
+            t = time.perf_counter()
+            cm.compute_many(files)
+            timings[w].append(time.perf_counter() - t)
+        say(f"round {rnd + 1}/{repeats} done")
+
     rows = []
     medians = []
     for w in workers:
-        say(f"md5 with {w} worker(s), {repeats} timed pass(es) ...")
-        cm = ChecksumManager(workers=w)
-        timings = []
-        for _ in range(repeats):
-            t = time.perf_counter()
-            cm.compute_many(files)
-            timings.append(time.perf_counter() - t)
-        median = statistics.median(timings)
+        runs = timings[w]
+        median = statistics.median(runs)
         medians.append(median)
         rows.append({
             "workers": w,
-            "seconds_first": round(timings[0], 3),
+            "seconds_min": round(min(runs), 3),
             "seconds_median": round(median, 3),
+            "seconds_max": round(max(runs), 3),
             "mb_per_s_median": _mb_per_s(inv.total_bytes, median),
+            "spread_pct": round(100 * (max(runs) - min(runs)) / median, 1) if median > 0 else 0.0,
         })
     # Speedup uses the unrounded medians; rounded seconds can be 0.0 for tiny data sets.
     for r, m in zip(rows, medians):
         r["speedup"] = round(medians[0] / m, 2) if m > 0 else 0.0
 
-    warnings = speedup_warnings(rows)
+    warnings = speedup_warnings(rows) + spread_warnings(rows)
     if not warmup:
         warnings.append("no warm-up: the first row includes the cold read and is not comparable.")
 
@@ -137,12 +155,12 @@ def format_markdown(result: dict) -> str:
         lines.append(f"First read (warm-up): {fr} s ({_mb_per_s(result['total_bytes'], fr)} MB/s)")
     lines += [
         "",
-        "| workers | first pass (s) | median (s) | MB/s (median) | speedup |",
-        "|---:|---:|---:|---:|---:|",
+        "| workers | min (s) | median (s) | max (s) | MB/s (median) | speedup |",
+        "|---:|---:|---:|---:|---:|---:|",
     ]
     for r in result["md5"]:
-        lines.append(f"| {r['workers']} | {r['seconds_first']} | {r['seconds_median']} "
-                     f"| {r['mb_per_s_median']} | {r['speedup']}x |")
+        lines.append(f"| {r['workers']} | {r['seconds_min']} | {r['seconds_median']} "
+                     f"| {r['seconds_max']} | {r['mb_per_s_median']} | {r['speedup']}x |")
     if result["archive"]:
         a = result["archive"]
         lines += ["", (f"Verified archive copy: {a['seconds']} s ({a['mb_per_s']} MB/s, "

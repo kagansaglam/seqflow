@@ -44,6 +44,29 @@ the source of an archive is removed only after every copy passes md5 verificatio
 deletion refuses paths outside the given root and validates the whole list before
 removing anything; symlinks are never followed.
 
+## Benchmarks
+
+Synthetic data (random bytes in FASTQ-like file names, `seqflow synth`), not sequencing
+data. Host: Windows 11, 8 logical CPUs, Python 3.13, files in the OS page cache after a
+warm-up read, so the numbers describe hashing throughput, not disk speed. Measured
+2026-11-03.
+
+| Data set | Files | Size | md5 with 8 threads | Throughput |
+|---|---:|---:|---:|---:|
+| Many small files | 5,000 | 2.49 GB | 1.9 s | 1.3 GB/s |
+| Fewer large files | 500 | 2.52 GB | 0.9 s | 2.8 GB/s |
+
+Where the time goes (`md5_probe`-style check on the 500-file set, MB/s with 1 / 8 threads):
+md5 of an in-memory buffer 629 / 2059, reading files without hashing 2798 / 4713,
+reading and hashing 368 / 2352. Hashing alone scales about 3.3x from 1 to 8 threads on
+this CPU.
+
+No speedup factor is reported. Single-thread timings of the same work varied between
+200 and 370 MB/s across runs on this machine, so any ratio against that baseline would
+mostly measure the baseline's instability. `seqflow bench` therefore interleaves the
+worker counts round by round, prints min / median / max, and warns when a speedup
+exceeds what the thread count allows or when timings vary by more than 25 %.
+
 ## Database, QC and reports
 
 ```bash
