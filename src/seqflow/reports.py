@@ -190,7 +190,10 @@ def format_table(rows: list[dict]) -> str:
     def cell(value) -> str:
         if value is None:
             return ""
-        return f"{value:.4g}" if isinstance(value, float) else str(value)
+        if isinstance(value, float):
+            # whole numbers (read counts) in full, other values with 4 significant digits
+            return str(int(value)) if value.is_integer() and abs(value) < 1e15 else f"{value:.4g}"
+        return str(value)
 
     body = [[cell(r.get(c)) for c in columns] for r in rows]
     widths = [max(len(c), *(len(b[i]) for b in body)) for i, c in enumerate(columns)]

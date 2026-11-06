@@ -131,6 +131,31 @@ that are not a multiple of 4 mark the run `failed`) and stored with its read cou
 ENA/SRA names (`SRR123_1.fastq.gz`) and Illumina names (`S1_S1_L001_R1_001.fastq.gz`) are
 both understood. Running it again updates rows instead of duplicating them.
 
+## Real data run
+
+`register` was run on a public RNA-seq data set: airway smooth muscle cells, BioProject
+PRJNA229998 (GEO GSE52778), human, Illumina HiSeq 2000, paired-end 75 bp. Five of the 16
+runs were used (SRR1039508 - SRR1039512, untreated and treated cell lines).
+
+| Run | Read pairs (ENA) | Read pairs counted by seqflow |
+|---|---:|---:|
+| SRR1039508 | 22,935,521 | 22,935,521 (R1) / 22,935,521 (R2) |
+| SRR1039509 | 21,155,707 | 21,155,707 / 21,155,707 |
+| SRR1039510 | 22,852,619 | 22,852,619 / 22,852,619 |
+| SRR1039511 | 21,938,637 | 21,938,637 / 21,938,637 |
+| SRR1039512 | 28,136,282 | 28,136,282 / 28,136,282 |
+
+10 files, 15.0 GB, 234,037,532 reads in total, no problems reported. The files were
+fetched from the NCBI SRA with `scripts/sra_to_fastq.py` (`prefetch`, `fasterq-dump`,
+gzip level 4), because the ENA file server was too slow from the machine used (about
+0.1 MB/s against 13 MB/s from the NCBI copy on Amazon). Since the FASTQ files are
+regenerated from the `.sra` files, their md5 sums differ from the ones ENA publishes;
+the check is the read count against ENA's `read_count` and NCBI's own `.sra` validation.
+`scripts/fetch_ena.py` downloads from ENA directly (resumable, md5-verified) and is the
+better choice where the ENA server is reachable.
+
+Not done on this data yet: FastQC/MultiQC and `qc-ingest`, downstream analysis.
+
 ## Database, QC and reports
 
 ```bash
@@ -180,5 +205,7 @@ seqflow watch /data/runs --platform illumina
 ## Status
 
 Early development. See `TASKS.md` for the roadmap. Unit tests use mocked
-demultiplexer binaries; validation on real Illumina/ONT runs is still to do.
+demultiplexer binaries; validation of demultiplexing on real Illumina/ONT runs is still
+to do. File registration, checksums and the database have been run on real public data
+(see above).
 Benchmarks in this repository are run on synthetic data and say so.

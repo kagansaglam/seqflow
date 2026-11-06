@@ -129,3 +129,10 @@ def test_format_table():
     assert lines[0].split() == ["a", "b", "c"]
     assert "0.1235" in lines[2]
     assert len(lines) == 4
+
+
+def test_format_table_prints_whole_numbers_in_full():
+    from seqflow.reports import format_table
+
+    out = format_table([{"s": "A", "reads": 21155707.0, "gc": 48.123456}])
+    assert "21155707" in out and "e+" not in out and "48.12" in out

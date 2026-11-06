@@ -5,7 +5,8 @@
 
 ## Phase 1 - Real-data validation (week 1-2)
 - [x] `seqflow register` for already existing FASTQ files (md5, gzip check, read counts)
-- [ ] Register a real public FASTQ data set (ENA/SRA) and record accession, file count and size here
+- [x] Register a real public FASTQ data set (airway, PRJNA229998, 5 runs, 15.0 GB) and record the result in the README
+- [ ] Run FastQC and MultiQC on those files and load them with `qc-ingest`
 - [ ] Find small public Illumina test run (BCL) and run `bcl-convert` for real
 - [ ] Public ONT pod5 sample + `dorado demux`
 - [ ] Integration test marked `@pytest.mark.integration` (skipped without tools)
