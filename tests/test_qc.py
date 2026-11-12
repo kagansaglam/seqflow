@@ -154,7 +154,7 @@ def test_ingest_multiqc_and_sources_do_not_clash(db, tmp_path):
     f.write_text(MULTIQC)
     ing = QCIngestor(db)
     assert ing.ingest_multiqc("R1", f) == 5
-    db.add_qc("R1", "S1_R1", "percent_gc", 1.0)  # a manual metric with a clashing name
+    db.add_qc("R1", "S1", "R1.percent_gc", 1.0)  # a manual metric with a clashing name
     assert ing.ingest_multiqc("R1", f) == 5  # re-ingest leaves the manual row alone
 
 
@@ -171,3 +171,27 @@ def test_ingest_errors(db, tmp_path):
 def _write(path, text):
     path.write_text(text)
     return path
+
+
+# Header and values as written by MultiQC 1.35 for paired-end airway data (shortened).
+REAL_MULTIQC = (
+    "Sample\tfastqc-percent_duplicates\tfastqc-percent_gc\tfastqc-total_sequences\n"
+    "SRR1039508_1\t50.2958558183271\t50.0\t22.935520999999998\n"
+    "SRR1039508_2\t47.93919565810487\t50.0\t22.935520999999998\n"
+    "SRR1039509_1\t49.59447294108932\t49.0\t21.155707\n"
+)
+
+
+def test_ingest_real_multiqc_names_mates_and_units(db, tmp_path):
+    from sqlalchemy import select
+
+    from seqflow.models import QCMetric, Sample
+    db.get_or_create_run("R1", "illumina", "/x")
+    f = _write(tmp_path / "multiqc_general_stats.txt", REAL_MULTIQC)
+    assert QCIngestor(db).ingest_multiqc("R1", f) == 9
+    with db.session() as s:
+        rows = {(q.sample_id, q.name): q.value for q in s.scalars(select(QCMetric))}
+        assert not list(s.scalars(select(Sample)))  # QC ingest creates no samples
+    assert rows[("SRR1039508", "R2.percent_gc")] == 50.0
+    assert rows[("SRR1039509", "R1.total_sequences_millions")] == 21.155707
+    assert {sample for sample, _ in rows} == {"SRR1039508", "SRR1039509"}

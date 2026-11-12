@@ -182,7 +182,16 @@ class QCIngestor:
         return self.db.replace_qc(run_id, "fastqc", rows)
 
     def ingest_multiqc(self, run_id: str, general_stats: str | Path) -> int:
+        """Store MultiQC general statistics with the same sample and read naming as
+        ingest_fastqc: a MultiQC row 'SRR1_2' becomes sample 'SRR1', metric 'R2.<name>'.
+        MultiQC reports total_sequences in millions; it is stored as
+        'total_sequences_millions' so the unit is part of the name."""
         table = parse_multiqc_general_stats(general_stats)
-        rows = [(sample, name, value) for sample, metrics in table.items()
-                for name, value in metrics.items()]
+        rows = []
+        for label, metrics in table.items():
+            sample, read = split_sample_and_read(label)
+            for name, value in metrics.items():
+                if name == "total_sequences":
+                    name = "total_sequences_millions"
+                rows.append((sample, name if read == "SE" else f"{read}.{name}", value))
         return self.db.replace_qc(run_id, "multiqc", rows)
