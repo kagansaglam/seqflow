@@ -116,8 +116,8 @@ Limits worth knowing:
 * Two starts at the very same instant that both find a stale lock can still race. This needs
   a crashed holder and simultaneous starts.
 * Slack and SMTP delivery is tested against fake servers, not against real services.
-* The `bcl-convert` call is tested with a stand-in script (`tests/test_end_to_end.py`), not
-  with the real tool.
+* The automated tests use a stand-in `bcl-convert` (`tests/test_end_to_end.py`); the real tool
+  was run by hand on one small HiSeq run (see "A real BCL run"), not in CI.
 
 ## Registering existing FASTQ files
 
@@ -209,6 +209,49 @@ well-formed barcodes with 118 - 135 reads each that are not in the sample table,
 looks like samples of the original study that the tutorial subset leaves out; this was not
 checked further. 302,581 reads were demultiplexed in about 18 s on the same laptop.
 
+## A real BCL run through `seqflow process`
+
+Run `161020_D00547_0905_BH35KCBCXY`: the reduced HiSeq 2500 run that 10x Genomics publishes
+as `cellranger-tiny-bcl-1.2.0` (1 lane, 1 tile, reads 26 + 8 (index) + 98 cycles). BCL
+Convert 4.6.2 ran from the nf-core container `quay.io/nf-core/bclconvert:4.6.2` under WSL2
+through `deploy/bcl-convert-docker.sh`.
+
+```bash
+python3 scripts/make_pf_filters.py RUN_DIR          # see "Missing filter files" below
+cp examples/tiny_bcl/SampleSheet.csv RUN_DIR/SampleSheet.csv
+seqflow process RUN_DIR --platform illumina --no-launch --output-root /data/fastq
+```
+
+| | |
+|---|---:|
+| Clusters (all passing filter, see below) | 2,136,539 |
+| Assigned to the 16 indexes | 2,079,501 (97.3 %) |
+| with a perfect index / one mismatch | 2,063,363 / 16,138 |
+| Undetermined | 57,038 (2.7 %) |
+| seqflow result | status `done`, 17 samples, 34 FASTQ files, 207 MB, md5 manifest verified |
+
+Per 10x library: SI-GA-E3 490,306, SI-GA-F3 523,850, SI-GA-G3 551,082, SI-GA-H3 514,263
+reads. The perfect-index counts reported by BCL Convert equal the counts `seqflow
+barcode-scan` found in the index reads for every index checked (15 of 16).
+
+Three problems had to be solved on the way:
+
+* **Missing filter files.** The run folder has BCL files but no `*.filter` files. bcl2fastq
+  (`--ignore-missing-filter`) treats such tiles as all passing filter; BCL Convert stops
+  with "Could not detect filter file format" and, per Illumina, writes no reads for tiles
+  without filter data. `scripts/make_pf_filters.py` writes the filter files bcl2fastq
+  assumed (layout from the bcl2fastq2 v2.20 guide, cluster count from the BCL header,
+  never overwriting existing files).
+* **The published sample sheet does not fit the data.** 10x's example sheet names one
+  sample with index set SI-P03-C9; its four sequences occur in 7 of 2.1 million reads, so
+  nearly everything ended in Undetermined.
+* **Finding the real indexes.** `seqflow barcode-scan` on the index reads showed many
+  frequent 8-mers rather than four. 10x index sets contain each base once per position;
+  three such quadruples were among the 15 most frequent sequences. Looking the sequences up
+  in 10x's own table (`tenkit/constants.py` in 10XGenomics/supernova) identified them, and
+  a fourth set, as SI-GA-E3, F3, G3 and H3. `examples/tiny_bcl/SampleSheet.csv` lists the 16
+  indexes (minimum pairwise distance 4, so BCL Convert's default of one mismatch is safe).
+
 ## Database, QC and reports
 
 ```bash
@@ -257,9 +300,9 @@ seqflow watch /data/runs --platform illumina
 
 ## Status
 
-Early development. See `TASKS.md` for the roadmap. Unit tests use mocked
-demultiplexer binaries; demultiplexing with the vendor tools (bcl-convert, dorado) on
-real runs is still to do; barcode demultiplexing of real FASTQ data is validated (see
-above). File registration, checksums and the database have been run on real public data
-(see above).
+Early development. See `TASKS.md` for the roadmap. Run on real public data so far:
+BCL Convert on a small HiSeq run through `seqflow process`, barcode demultiplexing of
+FASTQ data (checked against QIIME 2), file registration, checksums, FastQC/MultiQC
+ingestion and reports. Not yet run on real data: ONT (dorado), PacBio, the watcher with a
+live instrument, Slack/e-mail delivery.
 Benchmarks in this repository are run on synthetic data and say so.
