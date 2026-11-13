@@ -7,6 +7,8 @@
 - [x] `seqflow register` for already existing FASTQ files (md5, gzip check, read counts)
 - [x] Register a real public FASTQ data set (airway, PRJNA229998, 5 runs, 15.0 GB) and record the result in the README
 - [x] Run FastQC and MultiQC on those files and load them with `qc-ingest`
+- [x] FASTQ barcode demultiplexer, validated against QIIME 2 on the Moving Pictures data
+- [ ] bcl-convert on the 10x tiny BCL run (HiSeq, 8-base index) through `seqflow process`
 - [ ] Find small public Illumina test run (BCL) and run `bcl-convert` for real
 - [ ] Public ONT pod5 sample + `dorado demux`
 - [ ] Integration test marked `@pytest.mark.integration` (skipped without tools)

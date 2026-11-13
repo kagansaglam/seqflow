@@ -1,4 +1,9 @@
-"""Illumina-style SampleSheet parsing and validation."""
+"""Illumina-style SampleSheet parsing and validation.
+
+Both layouts are read: the v1 layout with a [Data] section (columns ``index`` and
+``index2``) and the v2 layout used by NovaSeq X / DRAGEN with a [BCLConvert_Data]
+section (columns ``Index`` and ``Index2``).
+"""
 from __future__ import annotations
 
 import csv
@@ -9,6 +14,14 @@ from pathlib import Path
 from .exceptions import SampleSheetError
 
 _INDEX_RE = re.compile(r"^[ACGTN]+$")
+DATA_SECTIONS = ("[Data]", "[BCLConvert_Data]")
+
+
+def _cell(row: dict, *names: str) -> str | None:
+    for name in names:
+        if value := (row.get(name) or "").strip():
+            return value.upper()
+    return None
 
 
 @dataclass(frozen=True)
@@ -34,13 +47,19 @@ class SampleSheet:
         if not path.is_file():
             raise SampleSheetError(f"sample sheet not found: {path}")
         lines = path.read_text().splitlines()
-        try:
-            start = next(i for i, ln in enumerate(lines) if ln.strip().startswith("[Data]"))
-        except StopIteration:
-            raise SampleSheetError("no [Data] section found") from None
-        rows = [ln for ln in lines[start + 1:] if ln.strip() and not ln.startswith("[")]
+        start = next((i for i, ln in enumerate(lines)
+                      if ln.strip().split(",")[0] in DATA_SECTIONS), None)
+        if start is None:
+            raise SampleSheetError("no [Data] or [BCLConvert_Data] section found")
+        rows = []
+        for ln in lines[start + 1:]:
+            if ln.startswith("["):
+                break  # next section
+            if ln.strip().strip(","):
+                rows.append(ln)
         reader = csv.DictReader(rows)
-        header = reader.fieldnames or []
+        reader.fieldnames = [h.strip() for h in reader.fieldnames or []]
+        header = reader.fieldnames
         for col in cls.REQUIRED:
             if col not in header:
                 raise SampleSheetError(f"missing required column: {col}")
@@ -49,8 +68,8 @@ class SampleSheet:
             lane = row.get("Lane")
             records.append(SampleRecord(
                 sample_id=row["Sample_ID"].strip(),
-                index1=(row.get("index") or "").strip().upper() or None,
-                index2=(row.get("index2") or "").strip().upper() or None,
+                index1=_cell(row, "index", "Index"),
+                index2=_cell(row, "index2", "Index2"),
                 lane=int(lane) if lane and lane.strip().isdigit() else None,
                 project=(row.get("Sample_Project") or "").strip() or None,
             ))

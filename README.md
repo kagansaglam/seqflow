@@ -27,6 +27,7 @@ run folder appears -> validate SampleSheet -> demultiplex (Illumina / ONT)
 | `bench.py` | `benchmark` | Read-only md5 throughput benchmark with host info |
 | `migrations/` | Alembic | Versioned schema: 0001 initial, 0002 BIGINT file sizes + QC source/uniqueness |
 | `register.py` | `Registrar` | Record existing FASTQ files: md5, size, gzip integrity, read count; no copying |
+| `barcodes.py` | `BarcodeSet`, `FastqDemultiplexer` | Demultiplex FASTQ by barcode (separate index read or read header), collision-safe mismatch correction, Undetermined, barcode discovery |
 | `qc.py` | `QCIngestor` | Parse FastQC (folders or .zip) and MultiQC general stats into `qc_metrics`, idempotently |
 | `reports.py` | `Reporter` | Yield per project, failed runs, QC outliers (median/MAD), event log, run report |
 
@@ -175,6 +176,39 @@ counted twice in the outlier statistics.
 
 Not done on this data yet: downstream analysis (alignment, quantification).
 
+## Demultiplexing real data by barcode
+
+```bash
+seqflow demux-fastq sequences.fastq.gz --barcode-reads barcodes.fastq.gz \
+    --sample-map sample_metadata.tsv --barcode-column barcode-sequence --out demux/ \
+    --register-run MOVING_PICTURES
+seqflow barcode-scan Undetermined_S0_L001_I1_001.fastq.gz --top 20   # which barcodes are there?
+```
+
+The mismatch tolerance is limited by the barcode set: with a minimum pairwise distance d,
+at most (d - 1) // 2 errors are corrected, and a read that is equally close to two
+barcodes is never assigned. Orientation (barcodes as given or reverse-complemented) is
+detected from the first 10,000 reads. Reads and barcode reads are checked to be in step.
+
+Validated on the QIIME 2 "Moving Pictures" data: real Illumina 16S reads from the Earth
+Microbiome Project protocol, 12-base Golay barcodes in a separate read, 34 samples.
+
+| | seqflow (1 mismatch) | QIIME 2 `demux emp-single` (published `demux.qzv`, 2024.10) |
+|---|---:|---:|
+| Reads in | 302,581 | |
+| Assigned to the 34 samples | 263,932 (87.2 %) | 263,931 |
+| Samples with identical counts | 23 of 34 | |
+| Largest difference for a sample | 2 reads (0.05 %) | |
+
+The remaining differences (15 reads in total) come from the error correction: QIIME 2
+decodes the Golay barcodes, seqflow corrects by Hamming distance within the barcode set
+(minimum distance 5 here). Allowing 2 mismatches assigns 2 more reads. Every input read
+ends up in exactly one output file: registering the 35 output files (34 samples and
+Undetermined) counts 302,581 reads. The Undetermined reads (12.8 %) are dominated by
+well-formed barcodes with 118 - 135 reads each that are not in the sample table, which
+looks like samples of the original study that the tutorial subset leaves out; this was not
+checked further. 302,581 reads were demultiplexed in about 18 s on the same laptop.
+
 ## Database, QC and reports
 
 ```bash
@@ -224,7 +258,8 @@ seqflow watch /data/runs --platform illumina
 ## Status
 
 Early development. See `TASKS.md` for the roadmap. Unit tests use mocked
-demultiplexer binaries; validation of demultiplexing on real Illumina/ONT runs is still
-to do. File registration, checksums and the database have been run on real public data
+demultiplexer binaries; demultiplexing with the vendor tools (bcl-convert, dorado) on
+real runs is still to do; barcode demultiplexing of real FASTQ data is validated (see
+above). File registration, checksums and the database have been run on real public data
 (see above).
 Benchmarks in this repository are run on synthetic data and say so.

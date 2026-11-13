@@ -3,6 +3,7 @@
 Run management:  seqflow watch | process | register | summary | requeue | digest | health
 Database:        seqflow db upgrade|downgrade|current | qc-ingest | report ...
 File management: seqflow inventory | archive | prune | rename | dedupe | synth | bench
+Barcodes:        seqflow demux-fastq | barcode-scan
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import threading
 from dataclasses import asdict
 from pathlib import Path
 
+from .barcodes import BarcodeSet, FastqDemultiplexer, read_sample_map, scan_barcodes
 from .bench import benchmark, format_markdown
 from .checksum import ChecksumManager
 from .db import Database
@@ -132,6 +134,30 @@ def build_parser() -> argparse.ArgumentParser:
     be.add_argument("--archive-to", help="also time a verified copy into this new directory")
     be.add_argument("--json", action="store_true", help="print JSON instead of a table")
 
+    dm = sub.add_parser("demux-fastq", help="split a FASTQ file into samples by barcode")
+    dm.add_argument("reads", help="FASTQ(.gz) with the reads")
+    src = dm.add_mutually_exclusive_group(required=True)
+    src.add_argument("--barcode-reads", help="FASTQ(.gz) with the barcode/index reads")
+    src.add_argument("--from-header", action="store_true",
+                     help="take the index from the read header (1:N:0:ACGT...)")
+    dm.add_argument("--sample-map", required=True, help="TSV/CSV with sample IDs and barcodes")
+    dm.add_argument("--barcode-column", default="barcode-sequence")
+    dm.add_argument("--sample-column", help="default: first column")
+    dm.add_argument("--mismatches", type=int, default=1)
+    dm.add_argument("--orientation", choices=["auto", "forward", "reverse-complement"],
+                    default="auto")
+    dm.add_argument("--out", required=True)
+    dm.add_argument("--register-run", metavar="RUN_ID",
+                    help="also record the output files in the database under this run")
+    dm.add_argument("--project")
+
+    bs = sub.add_parser("barcode-scan", help="most frequent barcodes in an index FASTQ")
+    bs.add_argument("fastq")
+    bs.add_argument("--from-header", action="store_true")
+    bs.add_argument("--length", type=int, help="only the first N bases")
+    bs.add_argument("--top", type=int, default=20)
+    bs.add_argument("--limit", type=int, help="stop after this many reads")
+
     qi = sub.add_parser("qc-ingest", help="load FastQC / MultiQC results into the database")
     qi.add_argument("run_id")
     qi.add_argument("--fastqc-dir", help="directory with FastQC output (folders or .zip files)")
@@ -168,10 +194,42 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-FILE_COMMANDS = {"inventory", "archive", "prune", "rename", "dedupe", "synth", "bench"}
+FILE_COMMANDS = {"inventory", "archive", "prune", "rename", "dedupe", "synth", "bench",
+                 "barcode-scan"}
+
+
+def _run_barcode_scan(args: argparse.Namespace) -> int:
+    total, counts = scan_barcodes(args.fastq, from_header=args.from_header,
+                                  length=args.length, limit=args.limit)
+    rows = [{"barcode": bc, "reads": n, "percent": round(100 * n / total, 2)}
+            for bc, n in counts.most_common(args.top)]
+    print(f"{total} reads, {len(counts)} distinct barcodes")
+    print(format_table(rows))
+    return 0
+
+
+def _run_demux_fastq(args: argparse.Namespace) -> int:
+    bset = BarcodeSet(read_sample_map(args.sample_map, args.barcode_column, args.sample_column),
+                      mismatches=args.mismatches)
+    stats = FastqDemultiplexer(bset, args.out, orientation=args.orientation).run(
+        args.reads, None if args.from_header else args.barcode_reads)
+    print(json.dumps({k: v for k, v in asdict(stats).items() if k != "per_sample"}, indent=2))
+    print(format_table([{"sample": s, "reads": n} for s, n in sorted(stats.per_sample.items())]))
+    if args.register_run:
+        db = Database(args.db)
+        try:
+            db.upgrade()
+            res = Registrar(db).register(args.register_run, args.out, project=args.project,
+                                         pattern="*.fastq.gz")
+            print(json.dumps(asdict(res), indent=2))
+        finally:
+            db.engine.dispose()
+    return 0
 
 
 def _run_file_command(args: argparse.Namespace) -> int:
+    if args.cmd == "barcode-scan":
+        return _run_barcode_scan(args)
     if args.cmd == "synth":
         summary = generate_fileset(
             args.root, args.files, min_bytes=args.min_kb * 1000, max_bytes=args.max_kb * 1000,
@@ -313,6 +371,8 @@ def _run_digest(db: Database, args: argparse.Namespace) -> int:
 def _dispatch(args: argparse.Namespace) -> int:
     if args.cmd in FILE_COMMANDS:
         return _run_file_command(args)
+    if args.cmd == "demux-fastq":
+        return _run_demux_fastq(args)
     if args.cmd == "health":
         healthy, message = check_heartbeat(args.heartbeat_file, args.max_age)
         print(message, file=sys.stdout if healthy else sys.stderr)
