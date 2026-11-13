@@ -18,6 +18,13 @@ def _iso(value: dt.datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+SOURCE_PRIORITY = ("fastqc", "multiqc", "seqflow", "manual")
+
+
+def _source_rank(source: str | None) -> int:
+    return SOURCE_PRIORITY.index(source) if source in SOURCE_PRIORITY else len(SOURCE_PRIORITY)
+
+
 class Reporter:
     def __init__(self, db: Database) -> None:
         self.db = db
@@ -97,18 +104,26 @@ class Reporter:
                 .where(Event.created_at >= since).group_by(Event.level)).all())
 
     def qc_table(self, run_id: str) -> list[dict]:
-        """One row per sample with every stored metric as a column."""
+        """One row per sample with every stored metric as a column. When several sources
+        stored the same metric, the one first in SOURCE_PRIORITY is shown."""
         with self.db.session() as s:
             rows = s.execute(
-                select(QCMetric.sample_id, QCMetric.name, QCMetric.value)
+                select(QCMetric.sample_id, QCMetric.name, QCMetric.value, QCMetric.source)
                 .join(Run, Run.id == QCMetric.run_id)
                 .where(Run.run_id == run_id)
                 .order_by(QCMetric.sample_id, QCMetric.name)
             ).all()
+        best: dict[tuple, tuple[int, float]] = {}
+        for sample, name, value, source in rows:
+            rank = _source_rank(source)
+            key = (sample or NO_PROJECT, name)
+            if key not in best or rank < best[key][0]:
+                best[key] = (rank, value)
         table: dict[str, dict] = defaultdict(dict)
-        for sample, name, value in rows:
-            table[sample or NO_PROJECT][name] = value
-        return [{"sample": sample, **metrics} for sample, metrics in sorted(table.items())]
+        for (sample, name), (_, value) in best.items():
+            table[sample][name] = value
+        return [{"sample": sample, **dict(sorted(metrics.items()))}
+                for sample, metrics in sorted(table.items())]
 
     def qc_outliers(self, metric: str, *, run_id: str | None = None, source: str | None = None,
                     threshold: float = 3.5, min_samples: int = 5) -> list[dict]:
@@ -120,7 +135,7 @@ class Reporter:
         than min_samples values or when the MAD is zero.
         """
         stmt = (
-            select(Run.run_id, QCMetric.sample_id, QCMetric.value)
+            select(Run.run_id, QCMetric.sample_id, QCMetric.value, QCMetric.source)
             .join(Run, Run.id == QCMetric.run_id)
             .where(QCMetric.name == metric)
         )
@@ -129,7 +144,15 @@ class Reporter:
         if source is not None:
             stmt = stmt.where(QCMetric.source == source)
         with self.db.session() as s:
-            rows = s.execute(stmt).all()
+            found = s.execute(stmt).all()
+        # One value per (run, sample): a sample whose metric came from two sources
+        # (e.g. FastQC and MultiQC) must not be counted twice.
+        best: dict[tuple, tuple[int, float]] = {}
+        for rid, sample, value, src in found:
+            rank = _source_rank(src)
+            if (rid, sample) not in best or rank < best[(rid, sample)][0]:
+                best[(rid, sample)] = (rank, value)
+        rows = [(rid, sample, value) for (rid, sample), (_, value) in best.items()]
         if len(rows) < min_samples:
             return []
         values = [v for _, _, v in rows]

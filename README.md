@@ -154,7 +154,26 @@ the check is the read count against ENA's `read_count` and NCBI's own `.sra` val
 `scripts/fetch_ena.py` downloads from ENA directly (resumable, md5-verified) and is the
 better choice where the ENA server is reachable.
 
-Not done on this data yet: FastQC/MultiQC and `qc-ingest`, downstream analysis.
+### QC on the same files
+
+FastQC (Ubuntu package, `-t 8`) and MultiQC 1.35 were run on the 10 files under WSL2, then
+loaded with `seqflow qc-ingest` (80 FastQC and 60 MultiQC metric values).
+
+* FastQC's `total_sequences` equals the read count seqflow made itself for all 10 files.
+* Read length 63 for every read, mean base quality 37.5 - 38.2, GC 49 - 50 %.
+* `seqflow report outliers R1.percent_duplicates` flags one sample, SRR1039512
+  (56.5 % against a median of 49.9 %, modified z = 11.8). It is also the run with the most
+  reads (28.1 M pairs against 21 - 23 M), which usually raises duplication; the flag marks
+  a statistical difference, not a failed sample.
+* `R1.percent_gc` gives no outliers: FastQC reports it as a whole number, four of five
+  samples have 49, so the median absolute deviation is 0 and a score is undefined.
+
+Running this on real output exposed two problems that synthetic test files had hidden, both
+fixed with tests: MultiQC names the mates inside the sample name (`SRR1039508_1`) and
+reports `total_sequences` in millions, and a metric stored by both FastQC and MultiQC was
+counted twice in the outlier statistics.
+
+Not done on this data yet: downstream analysis (alignment, quantification).
 
 ## Database, QC and reports
 

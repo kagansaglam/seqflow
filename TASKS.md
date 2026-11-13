@@ -6,7 +6,7 @@
 ## Phase 1 - Real-data validation (week 1-2)
 - [x] `seqflow register` for already existing FASTQ files (md5, gzip check, read counts)
 - [x] Register a real public FASTQ data set (airway, PRJNA229998, 5 runs, 15.0 GB) and record the result in the README
-- [ ] Run FastQC and MultiQC on those files and load them with `qc-ingest`
+- [x] Run FastQC and MultiQC on those files and load them with `qc-ingest`
 - [ ] Find small public Illumina test run (BCL) and run `bcl-convert` for real
 - [ ] Public ONT pod5 sample + `dorado demux`
 - [ ] Integration test marked `@pytest.mark.integration` (skipped without tools)
@@ -23,7 +23,7 @@
 - [x] Parse FastQC/MultiQC output into `qc_metrics`
 - [x] Reporting queries (per-project yield, failed runs, QC outliers)
 - [x] PostgreSQL integration tests in CI (service container)
-- [ ] Test the QC parsers against real FastQC/MultiQC output from the real runs
+- [x] Test the QC parsers against real FastQC/MultiQC output (airway data)
 
 ## Phase 4 - Autonomy + reporting (week 4-5)
 - [x] systemd unit / cron example, graceful shutdown, lock file, heartbeat, crash recovery

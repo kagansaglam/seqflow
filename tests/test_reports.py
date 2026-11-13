@@ -136,3 +136,17 @@ def test_format_table_prints_whole_numbers_in_full():
 
     out = format_table([{"s": "A", "reads": 21155707.0, "gc": 48.123456}])
     assert "21155707" in out and "e+" not in out and "48.12" in out
+
+
+def test_a_metric_stored_by_two_sources_counts_once(db):
+    db.get_or_create_run("R9", "illumina", "/x")
+    values = {"A": 50.0, "B": 51.0, "C": 52.0, "D": 50.5, "E": 80.0}
+    for sample, v in values.items():
+        db.add_qc("R9", sample, "R1.percent_duplicates", v, source="fastqc")
+        db.add_qc("R9", sample, "R1.percent_duplicates", v + 0.001, source="multiqc")
+    rep = Reporter(db)
+    out = rep.qc_outliers("R1.percent_duplicates", run_id="R9")
+    assert [r["sample"] for r in out] == ["E"] and out[0]["median"] == 51.0  # 5 values, not 10
+    # with disagreeing sources the table shows the higher-priority one (fastqc)
+    row = {r["sample"]: r for r in rep.qc_table("R9")}["A"]
+    assert row["R1.percent_duplicates"] == 50.0
