@@ -18,6 +18,7 @@
 - [x] Archive / delete / rename with dry-run + audit log
 - [x] Synthetic file-set generator and md5 benchmark tooling
 - [x] Run the benchmark on large sets and record the results in the README
+- [x] Bulk operations on 2,000 real files (American Gut Project): fetch, verify, copy, rename, move, audit
 - [ ] Resume-safe manifests
 
 ## Phase 3 - Database depth (week 3-4)

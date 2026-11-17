@@ -28,6 +28,7 @@ run folder appears -> validate SampleSheet -> demultiplex (Illumina / ONT)
 | `migrations/` | Alembic | Versioned schema: 0001 initial, 0002 BIGINT file sizes + QC source/uniqueness |
 | `register.py` | `Registrar` | Record existing FASTQ files: md5, size, gzip integrity, read count; no copying |
 | `barcodes.py` | `BarcodeSet`, `FastqDemultiplexer` | Demultiplex FASTQ by barcode (separate index read or read header), collision-safe mismatch correction, Undetermined, barcode discovery |
+| `sra.py` | `SraFetcher` | Parallel SRA download with read-count verification, retries, resumable JSON-lines log |
 | `qc.py` | `QCIngestor` | Parse FastQC (folders or .zip) and MultiQC general stats into `qc_metrics`, idempotently |
 | `reports.py` | `Reporter` | Yield per project, failed runs, QC outliers (median/MAD), event log, run report |
 
@@ -117,7 +118,7 @@ Limits worth knowing:
   a crashed holder and simultaneous starts.
 * Slack and SMTP delivery is tested against fake servers, not against real services.
 * The automated tests use a stand-in `bcl-convert` (`tests/test_end_to_end.py`); the real tool
-  was run by hand on one small HiSeq run (see "A real BCL run"), not in CI.
+  was run by hand on one small HiSeq run (see "BCL Convert on a HiSeq run"), not in CI.
 
 ## Registering existing FASTQ files
 
@@ -132,7 +133,7 @@ that are not a multiple of 4 mark the run `failed`) and stored with its read cou
 ENA/SRA names (`SRR123_1.fastq.gz`) and Illumina names (`S1_S1_L001_R1_001.fastq.gz`) are
 both understood. Running it again updates rows instead of duplicating them.
 
-## Real data run
+## Public human RNA-seq: airway (ENA PRJNA229998)
 
 `register` was run on a public RNA-seq data set: airway smooth muscle cells, BioProject
 PRJNA229998 (GEO GSE52778), human, Illumina HiSeq 2000, paired-end 75 bp. Five of the 16
@@ -176,7 +177,7 @@ counted twice in the outlier statistics.
 
 Not done on this data yet: downstream analysis (alignment, quantification).
 
-## Demultiplexing real data by barcode
+## Barcode demultiplexing, validated against QIIME 2
 
 ```bash
 seqflow demux-fastq sequences.fastq.gz --barcode-reads barcodes.fastq.gz \
@@ -209,7 +210,7 @@ well-formed barcodes with 118 - 135 reads each that are not in the sample table,
 looks like samples of the original study that the tutorial subset leaves out; this was not
 checked further. 302,581 reads were demultiplexed in about 18 s on the same laptop.
 
-## A real BCL run through `seqflow process`
+## BCL Convert on a HiSeq run through `seqflow process`
 
 Run `161020_D00547_0905_BH35KCBCXY`: the reduced HiSeq 2500 run that 10x Genomics publishes
 as `cellranger-tiny-bcl-1.2.0` (1 lane, 1 tile, reads 26 + 8 (index) + 98 cycles). BCL
@@ -251,6 +252,37 @@ Three problems had to be solved on the way:
   in 10x's own table (`tenkit/constants.py` in 10XGenomics/supernova) identified them, and
   a fourth set, as SI-GA-E3, F3, G3 and H3. `examples/tiny_bcl/SampleSheet.csv` lists the 16
   indexes (minimum pairwise distance 4, so BCL Convert's default of one mismatch is safe).
+
+## Bulk processing of 2,000 public runs (American Gut Project)
+
+2,000 runs of the American Gut Project (ENA PRJEB11419, 16S amplicon, Illumina MiSeq,
+single-end), drawn at random (seed 2026) from the 24,277 MiSeq runs with 10,000 - 100,000
+reads; `scripts/select_runs.py` reproduces the list in `examples/agp/agp_selected_2000.tsv`.
+
+```bash
+seqflow fetch-sra examples/agp/agp_selected_2000.tsv --out /data/agp/fastq --workers 8 \
+    --register-run AGP_2000 --project american-gut
+```
+
+| Step | Result |
+|---|---|
+| `fetch-sra` (8 parallel runs, NCBI SRA) | 2,000 of 2,000 runs, 0 failed, 37.7 min; every run's read count equal to ENA's `read_count` |
+| `register` | 2,000 files, 5.19 GB, 57,622,172 reads: equal to the sum of ENA's read counts for the list |
+| `inventory` | 2,000 files, 5,193,455,929 bytes, the same byte total as the database |
+| `archive` (copy) | 2,000 files copied, every copy md5-verified against its source |
+| `rename` | 2,000 files renamed in one all-or-nothing batch (dry run first) |
+| `dedupe` | no duplicate contents |
+| `archive --remove-source` (move) | 2,000 files copied and verified, then the sources deleted |
+| Audit log | 4,002 entries (2,000 renames, 2,000 deletions, 2 verified archive batches) |
+
+A first attempt on 20 runs exposed one more real-world case: for some runs NCBI only
+offers the "SRA Lite" format, which `prefetch` saves as `.sralite`; `fetch-sra` now accepts
+both. That run then succeeded in the full batch.
+
+md5 over the 2,000 real files on the same laptop (8 logical CPUs): the warm-up read took
+6.4 s (810 MB/s); with the files in the page cache, 8 threads hashed all 5.19 GB in 2.2 s
+(median of 3, 2.35 GB/s). As with the synthetic sets, no speedup factor is quoted: the
+single-thread and 4-thread timings varied too much between rounds (up to 56 %).
 
 ## Database, QC and reports
 
@@ -302,7 +334,8 @@ seqflow watch /data/runs --platform illumina
 
 Early development. See `TASKS.md` for the roadmap. Run on real public data so far:
 BCL Convert on a small HiSeq run through `seqflow process`, barcode demultiplexing of
-FASTQ data (checked against QIIME 2), file registration, checksums, FastQC/MultiQC
-ingestion and reports. Not yet run on real data: ONT (dorado), PacBio, the watcher with a
+FASTQ data (checked against QIIME 2), download, verification and bulk file operations on
+2,000 American Gut runs, file registration, checksums, FastQC/MultiQC ingestion and
+reports. Not yet run on real data: ONT (dorado), PacBio, the watcher with a
 live instrument, Slack/e-mail delivery.
 Benchmarks in this repository are run on synthetic data and say so.

@@ -48,3 +48,11 @@ class FileOperationError(SeqflowError):
 
 class PipelineLaunchError(SeqflowError):
     """Downstream pipeline could not be started."""
+
+
+class FetchError(SeqflowError):
+    """A run could not be downloaded or converted from a public archive."""
+
+
+class ReadCountMismatchError(FetchError):
+    """Downloaded reads differ from the count the archive publishes; retrying will not help."""

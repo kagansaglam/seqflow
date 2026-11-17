@@ -4,6 +4,7 @@ Run management:  seqflow watch | process | register | summary | requeue | digest
 Database:        seqflow db upgrade|downgrade|current | qc-ingest | report ...
 File management: seqflow inventory | archive | prune | rename | dedupe | synth | bench
 Barcodes:        seqflow demux-fastq | barcode-scan
+Public data:     seqflow fetch-sra
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ from .orchestrator import Orchestrator
 from .qc import QCIngestor
 from .register import Registrar
 from .reports import Reporter, format_table
+from .sra import SraFetcher, read_run_list
 from .synth import generate_fileset
 from .watcher import RunWatcher, check_heartbeat, install_signal_handlers
 
@@ -151,6 +153,21 @@ def build_parser() -> argparse.ArgumentParser:
                     help="also record the output files in the database under this run")
     dm.add_argument("--project")
 
+    fs = sub.add_parser("fetch-sra", help="download runs from the NCBI SRA in parallel, "
+                                          "check read counts, resume after interruption")
+    fs.add_argument("run_list", help="TSV/CSV with run_accession[, library_layout, read_count]")
+    fs.add_argument("--out", required=True)
+    fs.add_argument("--work", help="scratch folder (default: OUT/../sra_work)")
+    fs.add_argument("--tools-dir", help="folder with prefetch and fasterq-dump")
+    fs.add_argument("--workers", type=int, default=4, help="runs processed at the same time")
+    fs.add_argument("--dump-threads", type=int, default=2, help="threads per fasterq-dump")
+    fs.add_argument("--retries", type=int, default=3)
+    fs.add_argument("--limit", type=int, help="only the first N runs of the list (trial run)")
+    fs.add_argument("--log", help="JSON-lines log (default: OUT/fetch_log.jsonl)")
+    fs.add_argument("--register-run", metavar="RUN_ID",
+                    help="record the downloaded files in the database under this run")
+    fs.add_argument("--project")
+
     bs = sub.add_parser("barcode-scan", help="most frequent barcodes in an index FASTQ")
     bs.add_argument("fastq")
     bs.add_argument("--from-header", action="store_true")
@@ -206,6 +223,35 @@ def _run_barcode_scan(args: argparse.Namespace) -> int:
     print(f"{total} reads, {len(counts)} distinct barcodes")
     print(format_table(rows))
     return 0
+
+
+def _run_fetch_sra(args: argparse.Namespace) -> int:
+    specs = read_run_list(args.run_list)[: args.limit]
+
+    def progress(res, n, total):
+        detail = f"{res.reads} reads, {res.seconds} s" if res.status == "ok" else res.error
+        print(f"[{n}/{total}] {res.accession} {res.status}: {detail}", flush=True)
+
+    fetcher = SraFetcher(args.out, args.work, args.tools_dir, workers=args.workers,
+                         dump_threads=args.dump_threads, retries=args.retries,
+                         log_path=args.log, on_result=progress)
+    try:
+        summary = fetcher.run(specs)
+    except KeyboardInterrupt:
+        print("interrupted; run the same command again to continue", file=sys.stderr)
+        return 130
+    print(json.dumps(asdict(summary), indent=2))
+    if args.register_run:
+        db = Database(args.db)
+        try:
+            db.upgrade()
+            res = Registrar(db).register(args.register_run, args.out, project=args.project,
+                                         pattern="*.fastq.gz")
+            print(json.dumps({k: v for k, v in asdict(res).items() if k != "problems"}
+                             | {"problems": len(res.problems)}, indent=2))
+        finally:
+            db.engine.dispose()
+    return 1 if summary.failed else 0
 
 
 def _run_demux_fastq(args: argparse.Namespace) -> int:
@@ -373,6 +419,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _run_file_command(args)
     if args.cmd == "demux-fastq":
         return _run_demux_fastq(args)
+    if args.cmd == "fetch-sra":
+        return _run_fetch_sra(args)
     if args.cmd == "health":
         healthy, message = check_heartbeat(args.heartbeat_file, args.max_age)
         print(message, file=sys.stdout if healthy else sys.stderr)
