@@ -1,11 +1,71 @@
 # seqflow
 
-Automated sequencing-run processing in object-oriented Python.
+[![CI](https://github.com/kagansaglam/seqflow/actions/workflows/ci.yml/badge.svg)](https://github.com/kagansaglam/seqflow/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.12-blue)
+![Database](https://img.shields.io/badge/database-PostgreSQL%2016-336791)
 
+Automated sequencing-run processing in object-oriented Python: seqflow notices when an
+instrument has finished a run, demultiplexes it, verifies every file with md5 checksums,
+records runs, samples and files in a database, and reports problems by Slack or e-mail.
+
+## How it works
+
+```mermaid
+flowchart LR
+    POLL["<b>watch</b><br/>poll run folder<br/>lock · heartbeat"] --> SHEET["<b>SampleSheet</b><br/>validate<br/>register samples"]
+    SHEET --> READY{"run<br/>finished?"}
+    READY -->|yes| DEMUX["<b>demultiplex</b><br/>bcl-convert<br/>dorado"]
+    READY -->|no| WAIT["<b>detected</b><br/>one warning<br/>retry next poll"]
+    WAIT -.-> POLL
+    DEMUX --> MD5["<b>md5 manifest</b><br/>verify every file"]
+    MD5 --> DB[("<b>database</b><br/>runs · samples<br/>fastq_files · events")]
+    DB --> LAUNCH["<b>launch</b><br/>downstream<br/>Nextflow"]
+    LAUNCH --> DONE(["<b>done</b>"])
+
+    SHEET -.->|error| FAIL
+    DEMUX -.->|error| FAIL
+    MD5 -.->|mismatch| FAIL
+    LAUNCH -.->|exit ≠ 0| FAIL
+    FAIL(["<b>failed</b><br/>error event in database<br/>alert: log · Slack · e-mail"]) -.->|seqflow requeue| POLL
+
+    classDef ok fill:#e6f4ea,stroke:#2e7d32,color:#1b3d1f
+    classDef bad fill:#fdecea,stroke:#c62828,color:#4a1212
+    classDef wait fill:#fff8e1,stroke:#b8860b,color:#4a3a05
+    class DONE ok
+    class FAIL bad
+    class WAIT wait
 ```
-run folder appears -> validate SampleSheet -> demultiplex (Illumina / ONT)
-   -> md5 manifest + verify -> record in database -> launch Nextflow -> notify
-```
+
+Every state change is stored in the database, so a run interrupted by a crash is picked up
+again on the next start, and polling an unfinished run leaves no noise in the history.
+Alerts always go to the log; Slack and e-mail are used when they are configured (see
+[Running unattended](#running-unattended)).
+
+## Results at a glance
+
+All on public data, all numbers reproducible from the commands in the linked sections.
+
+| What | Data | Result |
+|---|---|---|
+| [BCL Convert through `seqflow process`](#bcl-convert-on-a-hiseq-run-through-seqflow-process) | Real HiSeq 2500 run (10x tiny BCL), 2.1 M clusters | 97.3 % of reads assigned to 16 indexes; read totals match the cluster count; status `done`, 34 FASTQ files md5-verified |
+| [Barcode demultiplexing](#barcode-demultiplexing-validated-against-qiime-2) | QIIME 2 Moving Pictures, 34 samples, 302,581 reads | Per-sample counts identical to QIIME 2 for 23 samples, within 2 reads for the rest |
+| [Bulk processing](#bulk-processing-of-2000-public-runs-american-gut-project) | American Gut Project, 2,000 runs, 5.19 GB | All 2,000 downloaded with read counts equal to ENA; md5-verified copy, rename, move and delete of every file |
+| [RNA-seq registration and QC](#public-human-rna-seq-airway-ena-prjna229998) | airway (human), 5 samples, 15 GB, 234 M reads | Read counts identical to ENA and to FastQC; FastQC/MultiQC metrics in the database; QC outlier report |
+
+218 tests, run in CI on Python 3.10 and 3.12 against PostgreSQL 16.
+
+## Contents
+
+- [Components](#components)
+- [Bulk file management](#bulk-file-management) · [Benchmarks](#benchmarks)
+- [Running unattended](#running-unattended)
+- [Registering existing FASTQ files](#registering-existing-fastq-files)
+- Real-data runs: [airway RNA-seq](#public-human-rna-seq-airway-ena-prjna229998) ·
+  [barcode demultiplexing](#barcode-demultiplexing-validated-against-qiime-2) ·
+  [BCL Convert](#bcl-convert-on-a-hiseq-run-through-seqflow-process) ·
+  [2,000 American Gut runs](#bulk-processing-of-2000-public-runs-american-gut-project)
+- [Database, QC and reports](#database-qc-and-reports)
+- [Tests](#tests) · [Quick start](#quick-start) · [Status](#status)
 
 ## Components
 
