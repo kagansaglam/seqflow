@@ -3,6 +3,7 @@
 [![CI](https://github.com/kagansaglam/seqflow/actions/workflows/ci.yml/badge.svg)](https://github.com/kagansaglam/seqflow/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.12-blue)
 ![Database](https://img.shields.io/badge/database-PostgreSQL%2016-336791)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Automated sequencing-run processing in object-oriented Python: seqflow notices when an
 instrument has finished a run, demultiplexes it, verifies every file with md5 checksums,
@@ -399,3 +400,7 @@ FASTQ data (checked against QIIME 2), download, verification and bulk file opera
 reports. Not yet run on real data: ONT (dorado), PacBio, the watcher with a
 live instrument, Slack/e-mail delivery.
 Benchmarks in this repository are run on synthetic data and say so.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
