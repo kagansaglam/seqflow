@@ -169,7 +169,7 @@ for HTTP 4xx.
 `deploy/` has a systemd unit for the watcher (`KillMode=mixed`, long stop timeout), a
 service and timer for the daily digest, and a crontab alternative.
 
-Limits worth knowing:
+Operational notes:
 
 * Ctrl+C in a terminal also reaches the demultiplexer started by the watcher (same process
   group), so that run is marked `failed`; `seqflow requeue` sends it back. The provided
@@ -177,7 +177,6 @@ Limits worth knowing:
   real systemd.
 * Two starts at the very same instant that both find a stale lock can still race. This needs
   a crashed holder and simultaneous starts.
-* Slack and SMTP delivery is tested against fake servers, not against real services.
 * The automated tests use a stand-in `bcl-convert` (`tests/test_end_to_end.py`); the real tool
   was run by hand on one small HiSeq run (see "BCL Convert on a HiSeq run"), not in CI.
 
@@ -393,13 +392,17 @@ seqflow watch /data/runs --platform illumina
 
 ## Status
 
-Early development. See `TASKS.md` for the roadmap. Run on real public data so far:
-BCL Convert on a small HiSeq run through `seqflow process`, barcode demultiplexing of
-FASTQ data (checked against QIIME 2), download, verification and bulk file operations on
-2,000 American Gut runs, file registration, checksums, FastQC/MultiQC ingestion and
-reports. Not yet run on real data: ONT (dorado), PacBio, the watcher with a
-live instrument, Slack/e-mail delivery.
-Benchmarks in this repository are run on synthetic data and say so.
+Run on real public data so far: BCL Convert on a small HiSeq run through
+`seqflow process`, barcode demultiplexing of FASTQ data (checked against QIIME 2),
+download, verification and bulk file operations on 2,000 American Gut runs, file
+registration, checksums, FastQC/MultiQC ingestion and reports. Benchmarks state whether
+they ran on synthetic or real files. See `TASKS.md` for the roadmap.
+
+### Next steps
+
+- ONT (dorado) and PacBio demultiplexing on real data
+- Live Slack and e-mail delivery test
+- Run a real downstream Nextflow pipeline from the launch step
 
 ## License
 
